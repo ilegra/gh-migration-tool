@@ -24,7 +24,11 @@ def test_given_valid_inventory_client_when_updating_inventory_then_succeeds() ->
 
     results = update_inventory([_unit()], settings, inventory_client=client)
 
-    assert results["service-a"].passed is True
+    res = results["service-a"]
+    assert res.unit_name == "service-a"
+    assert res.passed is True
+    assert res.target_status == "migrated"
+    assert "migrated" in res.message
     client.update_progress.assert_called_once_with(
         repository_name="service-a",
         status="migrated",
@@ -41,8 +45,11 @@ def test_given_failing_inventory_client_when_updating_inventory_then_marks_faile
 
     results = update_inventory([_unit()], settings, inventory_client=client)
 
-    assert results["service-a"].passed is False
-    assert "Sheets API 503" in results["service-a"].message
+    res = results["service-a"]
+    assert res.unit_name == "service-a"
+    assert res.passed is False
+    assert res.target_status == "migrated"
+    assert "Sheets API 503" in res.message
 
 
 def test_given_missing_spreadsheet_id_when_updating_inventory_then_marks_failed() -> (
@@ -52,5 +59,16 @@ def test_given_missing_spreadsheet_id_when_updating_inventory_then_marks_failed(
 
     results = update_inventory([_unit()], settings, inventory_client=None)
 
-    assert results["service-a"].passed is False
-    assert "GOOGLE_SPREADSHEET_ID" in results["service-a"].message
+    res = results["service-a"]
+    assert res.unit_name == "service-a"
+    assert res.passed is False
+    assert res.target_status == "migrated"
+    assert "GOOGLE_SPREADSHEET_ID" in res.message
+
+
+def test_given_empty_verified_units_when_updating_inventory_then_returns_empty_dict() -> (
+    None
+):
+    results = update_inventory([], MigrationSettings())
+
+    assert results == {}

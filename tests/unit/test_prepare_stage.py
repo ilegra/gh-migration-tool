@@ -19,32 +19,45 @@ def test_given_all_passing_pre_checks_when_preparing_then_all_become_candidates(
     None
 ):
     u1, u2 = _unit("repo-a"), _unit("repo-b")
-    results = {
-        "repo-a": [CheckResult("c1", True, "ok")],
-        "repo-b": [CheckResult("c1", True, "ok")],
-    }
+    c1 = CheckResult("c1", True, "ok")
+    c2 = CheckResult("c1", True, "ok")
+    results = {"repo-a": [c1], "repo-b": [c2]}
 
     candidates, records = prepare_candidates([u1, u2], results)
 
     assert [c.name for c in candidates] == ["repo-a", "repo-b"]
+    assert records["repo-a"].unit == u1
     assert records["repo-a"].status == UnitStatus.SUCCEEDED
+    assert records["repo-a"].pre_checks == [c1]
+    assert records["repo-a"].setup_result is None
+    assert records["repo-a"].migration_result is None
+    assert records["repo-a"].post_checks == []
+    assert records["repo-a"].inventory_result is None
+    assert records["repo-a"].error_summary == ""
+
+    assert records["repo-b"].unit == u2
     assert records["repo-b"].status == UnitStatus.SUCCEEDED
+    assert records["repo-b"].pre_checks == [c2]
+    assert records["repo-b"].error_summary == ""
 
 
 def test_given_independent_failure_when_preparing_then_only_failed_unit_excluded() -> (
     None
 ):
     u1, u2 = _unit("repo-a"), _unit("repo-b")
-    results = {
-        "repo-a": [CheckResult("c1", False, "jenkins red")],
-        "repo-b": [CheckResult("c1", True, "ok")],
-    }
+    fail_check = CheckResult("c1", False, "jenkins red")
+    pass_check = CheckResult("c1", True, "ok")
+    results = {"repo-a": [fail_check], "repo-b": [pass_check]}
 
     candidates, records = prepare_candidates([u1, u2], results)
 
     assert [c.name for c in candidates] == ["repo-b"]
+    assert records["repo-a"].unit == u1
     assert records["repo-a"].status == UnitStatus.PRE_CHECK_FAILED
+    assert records["repo-a"].pre_checks == [fail_check]
+    assert records["repo-a"].error_summary == "jenkins red"
     assert records["repo-b"].status == UnitStatus.SUCCEEDED
+    assert records["repo-b"].error_summary == ""
 
 
 def test_given_atomic_group_with_one_failure_when_preparing_then_siblings_blocked() -> (
@@ -63,5 +76,17 @@ def test_given_atomic_group_with_one_failure_when_preparing_then_siblings_blocke
 
     assert [c.name for c in candidates] == ["docs"]
     assert records["backend"].status == UnitStatus.PRE_CHECK_FAILED
+    assert records["backend"].error_summary == "build failed"
     assert records["frontend"].status == UnitStatus.BLOCKED_BY_GROUP
+    assert "checkout" in records["frontend"].error_summary
     assert records["docs"].status == UnitStatus.SUCCEEDED
+    assert records["docs"].error_summary == ""
+
+
+def test_given_empty_units_when_preparing_then_returns_empty_candidates_and_records() -> (
+    None
+):
+    candidates, records = prepare_candidates([], {})
+
+    assert candidates == []
+    assert records == {}

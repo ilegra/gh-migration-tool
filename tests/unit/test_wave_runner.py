@@ -99,8 +99,15 @@ def test_given_mixed_stage_failures_when_running_wave_then_assigns_exact_termina
         _unit("setup-fail"),
         _unit("mig-fail"),
         _unit("post-fail"),
+        _unit("inv-fail"),
     ]
     inv_client = MagicMock()
+
+    def _update_side_effect(repository_name: str, **_: object) -> None:
+        if repository_name == "inv-fail":
+            raise RuntimeError("sheet unavailable")
+
+    inv_client.update_progress.side_effect = _update_side_effect
 
     runner = WaveRunner(
         settings=MigrationSettings(MAX_WORKERS=2),
@@ -112,12 +119,68 @@ def test_given_mixed_stage_failures_when_running_wave_then_assigns_exact_termina
     )
 
     report = runner.run(units)
-    by_name = {r.unit.name: r.status for r in report.records}
+    by_name = {r.unit.name: r for r in report.records}
 
-    assert by_name["ok-repo"] == UnitStatus.SUCCEEDED
-    assert by_name["pre-fail"] == UnitStatus.PRE_CHECK_FAILED
-    assert by_name["grp-blocked"] == UnitStatus.BLOCKED_BY_GROUP
-    assert by_name["setup-fail"] == UnitStatus.GITHUB_SETUP_FAILED
-    assert by_name["mig-fail"] == UnitStatus.MIGRATION_FAILED
-    assert by_name["post-fail"] == UnitStatus.POST_CHECK_FAILED
-    inv_client.update_progress.assert_called_once()
+    assert report.total_units == 7
+    assert report.status_counts[UnitStatus.SUCCEEDED] == 1
+    assert report.status_counts[UnitStatus.PRE_CHECK_FAILED] == 1
+    assert report.status_counts[UnitStatus.BLOCKED_BY_GROUP] == 1
+    assert report.status_counts[UnitStatus.GITHUB_SETUP_FAILED] == 1
+    assert report.status_counts[UnitStatus.MIGRATION_FAILED] == 1
+    assert report.status_counts[UnitStatus.POST_CHECK_FAILED] == 1
+    assert report.status_counts[UnitStatus.INVENTORY_UPDATE_FAILED] == 1
+
+    assert by_name["ok-repo"].status == UnitStatus.SUCCEEDED
+    assert by_name["ok-repo"].inventory_result is not None
+    assert by_name["ok-repo"].inventory_result.passed is True
+    assert by_name["pre-fail"].status == UnitStatus.PRE_CHECK_FAILED
+    assert by_name["grp-blocked"].status == UnitStatus.BLOCKED_BY_GROUP
+    assert by_name["setup-fail"].status == UnitStatus.GITHUB_SETUP_FAILED
+    assert by_name["mig-fail"].status == UnitStatus.MIGRATION_FAILED
+    assert by_name["post-fail"].status == UnitStatus.POST_CHECK_FAILED
+    assert by_name["inv-fail"].status == UnitStatus.INVENTORY_UPDATE_FAILED
+    assert "sheet unavailable" in by_name["inv-fail"].error_summary
+
+
+def test_given_exception_raising_plugins_when_running_wave_then_isolates_failures() -> (
+    None
+):
+    class _ExplodingPreCheck(PreCheck):
+        @property
+        def name(self) -> str:
+            return "exploding_pre"
+
+        def execute(self, unit: MigrationUnit, context: WaveContext) -> CheckResult:
+            raise RuntimeError("boom pre")
+
+    runner = WaveRunner(
+        settings=MigrationSettings(MAX_WORKERS=1),
+        pre_checks=[_ExplodingPreCheck()],
+        github_setup=_StubSetup(set()),
+        migrator=_StubMigrator(set()),
+        post_checks=[_StubPostCheck(set())],
+        inventory_client=MagicMock(),
+    )
+
+    report = runner.run([_unit("repo-a")])
+
+    assert report.total_units == 1
+    assert report.records[0].status == UnitStatus.PRE_CHECK_FAILED
+    assert "boom pre" in report.records[0].error_summary
+
+
+def test_given_empty_units_when_running_wave_then_returns_empty_report() -> None:
+    runner = WaveRunner(
+        settings=MigrationSettings(),
+        pre_checks=[],
+        github_setup=_StubSetup(set()),
+        migrator=_StubMigrator(set()),
+        post_checks=[],
+        inventory_client=MagicMock(),
+    )
+
+    report = runner.run([])
+
+    assert report.total_units == 0
+    assert report.records == []
+    assert all(count == 0 for count in report.status_counts.values())

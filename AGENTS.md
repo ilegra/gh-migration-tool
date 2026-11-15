@@ -23,6 +23,18 @@ TODO
 
 ### 4. Testing Principles
 
+Test assertion must implement the best effort to validate data structures. if method or functino being tested returns a data structure, asserts check data against all possible attribute values:
+
+```python
+
+result = function_being_tested()
+
+assert result.name == "Expected name"
+assert result.status  == 400
+
+
+```
+
 #### Unit Tests (`tests/unit/`)
 
 - **Scope & Isolation**: Unit tests must execute fast, deterministically, and offline without accessing external systems, APIs, or databases. All external dependencies and I/O collaborators must be mocked or injected.
@@ -40,6 +52,7 @@ TODO
     - `test_given_network_timeout_from_transport_when_listing_directory_then_raises_scraper_connection_error`
     - `test_given_empty_repository_url_when_scraping_then_raises_value_error`
     - `test_given_existing_repository_when_registering_then_preserves_status_and_migration_dates`
+  
 
 ### 5. Logging Guidelines & Standards
 

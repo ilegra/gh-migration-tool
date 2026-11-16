@@ -8,7 +8,11 @@ from collections.abc import Callable
 
 import requests
 
-from gh_migration_tool._http import build_jenkins_headers, format_jenkins_job_path
+from gh_migration_tool._http import (
+    build_http_session,
+    build_jenkins_headers,
+    format_jenkins_job_path,
+)
 from gh_migration_tool.interfaces import PostCheck, WaveContext
 from gh_migration_tool.models import CheckResult, MigrationStageResult, MigrationUnit
 from gh_migration_tool.stages.github_setup import resolve_github_target
@@ -96,7 +100,7 @@ class JenkinsTriggerPostCheck(PostCheck):
         session: requests.Session | None = None,
         sleep_fn: Callable[[float], None] = time.sleep,
     ) -> None:
-        self._session = session or requests.Session()
+        self._session = session or build_http_session()
         self._sleep = sleep_fn
 
     @property
@@ -126,22 +130,38 @@ class JenkinsTriggerPostCheck(PostCheck):
                 message="JENKINS_URL is not configured.",
             )
 
+        http_timeout = context.settings.http_timeout_seconds
         headers = build_jenkins_headers(
             context.settings.jenkins_username, context.settings.jenkins_token
         )
-        crumb_resp = self._session.get(
-            f"{jenkins_url}/crumbIssuer/api/json", headers=headers, timeout=15
-        )
-        if crumb_resp.status_code == 200:
-            crumb_data = crumb_resp.json()
-            field = crumb_data.get("crumbRequestField")
-            crumb = crumb_data.get("crumb")
-            if field and crumb:
-                headers[str(field)] = str(crumb)
-
         job_path = format_jenkins_job_path(unit.jenkins_job)
         trigger_url = f"{jenkins_url}/{job_path}/build"
-        trigger_resp = self._session.post(trigger_url, headers=headers, timeout=30)
+        try:
+            crumb_resp = self._session.get(
+                f"{jenkins_url}/crumbIssuer/api/json",
+                headers=headers,
+                timeout=min(15.0, http_timeout),
+            )
+            if crumb_resp.status_code == 200:
+                crumb_data = crumb_resp.json()
+                field = crumb_data.get("crumbRequestField")
+                crumb = crumb_data.get("crumb")
+                if field and crumb:
+                    headers[str(field)] = str(crumb)
+
+            trigger_resp = self._session.post(
+                trigger_url, headers=headers, timeout=http_timeout
+            )
+        except requests.RequestException as exc:
+            logger.error(
+                "Jenkins trigger request failed for unit '%s': %s", unit.name, exc
+            )
+            return CheckResult(
+                check_name=self.name,
+                passed=False,
+                message=f"Failed to trigger Jenkins job '{unit.jenkins_job}': {exc}",
+            )
+
         if trigger_resp.status_code not in (200, 201, 202):
             return CheckResult(
                 check_name=self.name,
@@ -158,7 +178,15 @@ class JenkinsTriggerPostCheck(PostCheck):
 
         while time.monotonic() < deadline:
             self._sleep(poll_interval)
-            resp = self._session.get(status_url, headers=headers, timeout=30)
+            try:
+                resp = self._session.get(
+                    status_url, headers=headers, timeout=http_timeout
+                )
+            except requests.RequestException as exc:
+                logger.warning(
+                    "Jenkins poll request failed for unit '%s': %s", unit.name, exc
+                )
+                continue
             if resp.status_code != 200:
                 continue
             data = resp.json()
@@ -196,7 +224,7 @@ class GitHubActionsTriggerPostCheck(PostCheck):
         session: requests.Session | None = None,
         sleep_fn: Callable[[float], None] = time.sleep,
     ) -> None:
-        self._session = session or requests.Session()
+        self._session = session or build_http_session()
         self._sleep = sleep_fn
 
     @property
@@ -229,15 +257,30 @@ class GitHubActionsTriggerPostCheck(PostCheck):
             )
 
         owner, repo, api_url, headers = target
+        http_timeout = context.settings.http_timeout_seconds
 
         ref = unit.branch_mapping.get("master", unit.branch_mapping.get("main", "main"))
         dispatch_url = (
             f"{api_url}/repos/{owner}/{repo}/actions/workflows/"
             f"{unit.github_workflow}/dispatches"
         )
-        disp_resp = self._session.post(
-            dispatch_url, headers=headers, json={"ref": ref}, timeout=30
-        )
+        try:
+            disp_resp = self._session.post(
+                dispatch_url, headers=headers, json={"ref": ref}, timeout=http_timeout
+            )
+        except requests.RequestException as exc:
+            logger.error(
+                "GitHub workflow dispatch failed for unit '%s': %s", unit.name, exc
+            )
+            return CheckResult(
+                check_name=self.name,
+                passed=False,
+                message=(
+                    f"Failed to dispatch GitHub workflow "
+                    f"'{unit.github_workflow}': {exc}"
+                ),
+            )
+
         if disp_resp.status_code not in (200, 201, 204):
             return CheckResult(
                 check_name=self.name,
@@ -257,9 +300,18 @@ class GitHubActionsTriggerPostCheck(PostCheck):
 
         while time.monotonic() < deadline:
             self._sleep(poll_interval)
-            runs_resp = self._session.get(
-                runs_url, headers=headers, params={"per_page": 1}, timeout=30
-            )
+            try:
+                runs_resp = self._session.get(
+                    runs_url,
+                    headers=headers,
+                    params={"per_page": 1},
+                    timeout=http_timeout,
+                )
+            except requests.RequestException as exc:
+                logger.warning(
+                    "GitHub workflow poll failed for unit '%s': %s", unit.name, exc
+                )
+                continue
             if runs_resp.status_code != 200:
                 continue
             runs = runs_resp.json().get("workflow_runs", [])

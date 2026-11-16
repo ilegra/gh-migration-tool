@@ -77,6 +77,7 @@ class GitHubSetup(ABC):
         Subclasses performing bulk IaC provisioning may override this method
         to operate on the full batch of Candidates at once.
         """
+
         def _run_unit(unit: MigrationUnit) -> SetupResult:
             try:
                 return self.setup_unit(unit, context)

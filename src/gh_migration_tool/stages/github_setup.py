@@ -8,6 +8,7 @@ from typing import Any
 
 import requests
 
+from gh_migration_tool._http import github_headers
 from gh_migration_tool.interfaces import GitHubSetup, WaveContext
 from gh_migration_tool.models import MigrationUnit, SetupResult
 
@@ -35,12 +36,16 @@ def parse_github_owner_repo(destination_url: str) -> tuple[str, str]:
     return parts[-2], parts[-1]
 
 
-def _github_headers(token: str) -> dict[str, str]:
-    return {
-        "Authorization": f"Bearer {token}",
-        "Accept": "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-    }
+def resolve_github_target(
+    unit: MigrationUnit, context: WaveContext
+) -> tuple[str, str, str, dict[str, str]] | None:
+    """Resolve (owner, repo, api_url, headers) for a unit, or None if unconfigured."""
+    if context.github_token_provider is None:
+        return None
+    owner, repo = parse_github_owner_repo(unit.destination_url)
+    token = context.github_token_provider.get_token()
+    api_url = context.settings.github_api_url.rstrip("/")
+    return owner, repo, api_url, github_headers(token)
 
 
 class VerifyRepoExistsGitHubSetup(GitHubSetup):
@@ -51,19 +56,18 @@ class VerifyRepoExistsGitHubSetup(GitHubSetup):
 
     def setup_unit(self, unit: MigrationUnit, context: WaveContext) -> SetupResult:
         """Verify destination repository existence on GitHub."""
-        if context.github_token_provider is None:
+        target = resolve_github_target(unit, context)
+        if target is None:
             return SetupResult(
                 unit_name=unit.name,
                 passed=False,
                 message="GitHubAppTokenProvider is not configured.",
             )
 
-        owner, repo = parse_github_owner_repo(unit.destination_url)
-        token = context.github_token_provider.get_token()
-        api_url = context.settings.github_api_url.rstrip("/")
+        owner, repo, api_url, headers = target
         url = f"{api_url}/repos/{owner}/{repo}"
 
-        response = self._session.get(url, headers=_github_headers(token), timeout=30)
+        response = self._session.get(url, headers=headers, timeout=30)
         if response.status_code == 200:
             return SetupResult(
                 unit_name=unit.name,
@@ -90,17 +94,15 @@ class GitHubApiSetup(GitHubSetup):
 
     def setup_unit(self, unit: MigrationUnit, context: WaveContext) -> SetupResult:
         """Ensure GitHub repository exists, then apply teams and rulesets."""
-        if context.github_token_provider is None:
+        target = resolve_github_target(unit, context)
+        if target is None:
             return SetupResult(
                 unit_name=unit.name,
                 passed=False,
                 message="GitHubAppTokenProvider is not configured.",
             )
 
-        owner, repo = parse_github_owner_repo(unit.destination_url)
-        token = context.github_token_provider.get_token()
-        api_url = context.settings.github_api_url.rstrip("/")
-        headers = _github_headers(token)
+        owner, repo, api_url, headers = target
 
         created = False
         repo_url = f"{api_url}/repos/{owner}/{repo}"

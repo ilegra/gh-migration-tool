@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from typing import Any
@@ -14,6 +15,7 @@ from gh_migration_tool.interfaces import (
     PostCheck,
     PreCheck,
     WaveContext,
+    run_parallel_by_unit,
 )
 from gh_migration_tool.models import (
     CheckResult,
@@ -89,56 +91,61 @@ class WaveRunner:
 
         logger.info("Starting Migration Wave with %d units", len(units))
 
-        # Step 1: Pre-checks (parallel per unit)
-        pre_results = self._run_pre_checks(units, context, max_workers)
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Step 1: Pre-checks (parallel per unit & check)
+            pre_results = self._run_pre_checks(units, context, executor)
 
-        # Step 2: Prepare (core stage)
-        candidates, records = prepare_candidates(units, pre_results)
+            # Step 2: Prepare (core stage)
+            candidates, records = prepare_candidates(units, pre_results)
 
-        # Step 3: GitHub Setup (wave/per-candidate)
-        setup_results = self.github_setup.setup_wave(candidates, context)
-        setup_passed_units: list[MigrationUnit] = []
-        for unit in candidates:
-            s_res = setup_results.get(unit.name)
-            records[unit.name].setup_result = s_res
-            if s_res is not None and s_res.passed:
-                setup_passed_units.append(unit)
-            else:
-                records[unit.name].status = UnitStatus.GITHUB_SETUP_FAILED
-                records[unit.name].error_summary = (
-                    s_res.message if s_res else "GitHub setup returned no result."
-                )
+            # Step 3: GitHub Setup (wave/per-candidate)
+            setup_results = self.github_setup.setup_wave(candidates, context)
+            setup_passed_units: list[MigrationUnit] = []
+            for unit in candidates:
+                s_res = setup_results.get(unit.name)
+                records[unit.name].setup_result = s_res
+                if s_res is not None and s_res.passed:
+                    setup_passed_units.append(unit)
+                else:
+                    records[unit.name].status = UnitStatus.GITHUB_SETUP_FAILED
+                    records[unit.name].error_summary = (
+                        s_res.message if s_res else "GitHub setup returned no result."
+                    )
 
-        # Step 4: Migration (parallel per unit)
-        mig_results = self._run_migrations(setup_passed_units, context, max_workers)
-        migrated_units: list[MigrationUnit] = []
-        for unit in setup_passed_units:
-            m_res = mig_results[unit.name]
-            records[unit.name].migration_result = m_res
-            if m_res.passed:
-                migrated_units.append(unit)
-            else:
-                records[unit.name].status = UnitStatus.MIGRATION_FAILED
-                records[unit.name].error_summary = (
-                    "; ".join(m_res.errors) or "Migration failed."
-                )
+            # Step 4: Migration (parallel per unit)
+            mig_results = self._run_migrations(
+                setup_passed_units, context, max_workers, executor
+            )
+            migrated_units: list[MigrationUnit] = []
+            for unit in setup_passed_units:
+                m_res = mig_results[unit.name]
+                records[unit.name].migration_result = m_res
+                if m_res.passed:
+                    migrated_units.append(unit)
+                else:
+                    records[unit.name].status = UnitStatus.MIGRATION_FAILED
+                    records[unit.name].error_summary = (
+                        "; ".join(m_res.errors) or "Migration failed."
+                    )
 
-        # Step 5: Post-checks (parallel per unit)
-        post_results = self._run_post_checks(
-            migrated_units, mig_results, context, max_workers
-        )
-        verified_units: list[MigrationUnit] = []
-        for unit in migrated_units:
-            checks = post_results.get(unit.name, [])
-            records[unit.name].post_checks = checks
-            if all(c.passed for c in checks):
-                verified_units.append(unit)
-            else:
-                failed_msgs = [c.message for c in checks if not c.passed and c.message]
-                records[unit.name].status = UnitStatus.POST_CHECK_FAILED
-                records[unit.name].error_summary = (
-                    "; ".join(failed_msgs) or "Post-check failed."
-                )
+            # Step 5: Post-checks (parallel per unit & check)
+            post_results = self._run_post_checks(
+                migrated_units, mig_results, context, executor
+            )
+            verified_units: list[MigrationUnit] = []
+            for unit in migrated_units:
+                checks = post_results.get(unit.name, [])
+                records[unit.name].post_checks = checks
+                if all(c.passed for c in checks):
+                    verified_units.append(unit)
+                else:
+                    failed_msgs = [
+                        c.message for c in checks if not c.passed and c.message
+                    ]
+                    records[unit.name].status = UnitStatus.POST_CHECK_FAILED
+                    records[unit.name].error_summary = (
+                        "; ".join(failed_msgs) or "Post-check failed."
+                    )
 
         # Step 6: Inventory Update (core stage)
         inv_results = update_inventory(
@@ -158,50 +165,64 @@ class WaveRunner:
         finished_at = datetime.now(timezone.utc)
         return build_wave_report(started_at, finished_at, ordered_records)
 
+    @staticmethod
+    def _run_unit_checks(
+        units: list[MigrationUnit],
+        checks: Sequence[PreCheck | PostCheck],
+        invoke: Callable[[Any, MigrationUnit], CheckResult],
+        executor: ThreadPoolExecutor,
+    ) -> dict[str, list[CheckResult]]:
+        results: dict[str, list[CheckResult]] = {u.name: [] for u in units}
+        if not units or not checks:
+            return results
+
+        ordered: dict[str, list[CheckResult | None]] = {
+            u.name: [None] * len(checks) for u in units
+        }
+
+        def _safe_execute(check: Any, unit: MigrationUnit) -> CheckResult:
+            try:
+                return invoke(check, unit)
+            except Exception as exc:
+                return CheckResult(
+                    check_name=check.name,
+                    passed=False,
+                    message=str(exc),
+                )
+
+        future_to_key = {
+            executor.submit(_safe_execute, check, unit): (unit.name, idx)
+            for unit in units
+            for idx, check in enumerate(checks)
+        }
+        for future in as_completed(future_to_key):
+            unit_name, idx = future_to_key[future]
+            ordered[unit_name][idx] = future.result()
+
+        for unit_name, unit_checks in ordered.items():
+            results[unit_name] = [c for c in unit_checks if c is not None]
+        return results
+
     def _run_pre_checks(
         self,
         units: list[MigrationUnit],
         context: WaveContext,
-        max_workers: int,
+        executor: ThreadPoolExecutor,
     ) -> dict[str, list[CheckResult]]:
-        results: dict[str, list[CheckResult]] = {u.name: [] for u in units}
-        if not units or not self.pre_checks:
-            return results
-
-        def _check_unit(unit: MigrationUnit) -> list[CheckResult]:
-            unit_checks: list[CheckResult] = []
-            for check in self.pre_checks:
-                try:
-                    unit_checks.append(check.execute(unit, context))
-                except Exception as exc:
-                    unit_checks.append(
-                        CheckResult(
-                            check_name=check.name,
-                            passed=False,
-                            message=str(exc),
-                        )
-                    )
-            return unit_checks
-
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            future_to_name = {
-                executor.submit(_check_unit, unit): unit.name for unit in units
-            }
-            for future in as_completed(future_to_name):
-                name = future_to_name[future]
-                results[name] = future.result()
-        return results
+        return self._run_unit_checks(
+            units,
+            self.pre_checks,
+            lambda check, unit: check.execute(unit, context),
+            executor,
+        )
 
     def _run_migrations(
         self,
         units: list[MigrationUnit],
         context: WaveContext,
         max_workers: int,
+        executor: ThreadPoolExecutor,
     ) -> dict[str, MigrationStageResult]:
-        results: dict[str, MigrationStageResult] = {}
-        if not units:
-            return results
-
         def _migrate_unit(unit: MigrationUnit) -> MigrationStageResult:
             try:
                 return self.migrator.migrate(unit, context)
@@ -212,47 +233,20 @@ class WaveRunner:
                     errors=[str(exc)],
                 )
 
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            future_to_name = {
-                executor.submit(_migrate_unit, unit): unit.name for unit in units
-            }
-            for future in as_completed(future_to_name):
-                name = future_to_name[future]
-                results[name] = future.result()
-        return results
+        return run_parallel_by_unit(
+            units, _migrate_unit, max_workers, executor=executor
+        )
 
     def _run_post_checks(
         self,
         units: list[MigrationUnit],
         mig_results: dict[str, MigrationStageResult],
         context: WaveContext,
-        max_workers: int,
+        executor: ThreadPoolExecutor,
     ) -> dict[str, list[CheckResult]]:
-        results: dict[str, list[CheckResult]] = {u.name: [] for u in units}
-        if not units or not self.post_checks:
-            return results
-
-        def _check_unit(unit: MigrationUnit) -> list[CheckResult]:
-            m_res = mig_results[unit.name]
-            unit_checks: list[CheckResult] = []
-            for check in self.post_checks:
-                try:
-                    unit_checks.append(check.execute(unit, m_res, context))
-                except Exception as exc:
-                    unit_checks.append(
-                        CheckResult(
-                            check_name=check.name,
-                            passed=False,
-                            message=str(exc),
-                        )
-                    )
-            return unit_checks
-
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            future_to_name = {
-                executor.submit(_check_unit, unit): unit.name for unit in units
-            }
-            for future in as_completed(future_to_name):
-                name = future_to_name[future]
-                results[name] = future.result()
-        return results
+        return self._run_unit_checks(
+            units,
+            self.post_checks,
+            lambda check, unit: check.execute(unit, mig_results[unit.name], context),
+            executor,
+        )

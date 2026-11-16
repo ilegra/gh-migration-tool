@@ -8,17 +8,11 @@ from collections.abc import Callable
 
 import requests
 
+from gh_migration_tool._http import build_jenkins_headers, format_jenkins_job_path
 from gh_migration_tool.interfaces import PostCheck, WaveContext
 from gh_migration_tool.models import CheckResult, MigrationStageResult, MigrationUnit
-from gh_migration_tool.stages.github_setup import (
-    _github_headers,
-    parse_github_owner_repo,
-)
+from gh_migration_tool.stages.github_setup import resolve_github_target
 from gh_migration_tool.stages.migration import capture_origin_branch_heads
-from gh_migration_tool.stages.pre_checks import (
-    _build_jenkins_headers,
-    _format_jenkins_job_path,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -132,7 +126,7 @@ class JenkinsTriggerPostCheck(PostCheck):
                 message="JENKINS_URL is not configured.",
             )
 
-        headers = _build_jenkins_headers(
+        headers = build_jenkins_headers(
             context.settings.jenkins_username, context.settings.jenkins_token
         )
         crumb_resp = self._session.get(
@@ -145,7 +139,7 @@ class JenkinsTriggerPostCheck(PostCheck):
             if field and crumb:
                 headers[str(field)] = str(crumb)
 
-        job_path = _format_jenkins_job_path(unit.jenkins_job)
+        job_path = format_jenkins_job_path(unit.jenkins_job)
         trigger_url = f"{jenkins_url}/{job_path}/build"
         trigger_resp = self._session.post(trigger_url, headers=headers, timeout=30)
         if trigger_resp.status_code not in (200, 201, 202):
@@ -226,17 +220,15 @@ class GitHubActionsTriggerPostCheck(PostCheck):
                 ),
             )
 
-        if context.github_token_provider is None:
+        target = resolve_github_target(unit, context)
+        if target is None:
             return CheckResult(
                 check_name=self.name,
                 passed=False,
                 message="GitHubAppTokenProvider is not configured.",
             )
 
-        owner, repo = parse_github_owner_repo(unit.destination_url)
-        token = context.github_token_provider.get_token()
-        api_url = context.settings.github_api_url.rstrip("/")
-        headers = _github_headers(token)
+        owner, repo, api_url, headers = target
 
         ref = unit.branch_mapping.get("master", unit.branch_mapping.get("main", "main"))
         dispatch_url = (

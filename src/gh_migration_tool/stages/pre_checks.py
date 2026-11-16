@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import base64
 import logging
-import urllib.parse
 
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util import Retry
 
+from gh_migration_tool._http import build_jenkins_headers, format_jenkins_job_path
 from gh_migration_tool.interfaces import PreCheck, WaveContext
 from gh_migration_tool.models import CheckResult, MigrationUnit
 
@@ -28,20 +27,6 @@ def _build_jenkins_session() -> requests.Session:
     session.mount("https://", adapter)
     session.mount("http://", adapter)
     return session
-
-
-def _build_jenkins_headers(username: str | None, token: str) -> dict[str, str]:
-    if username and token:
-        encoded = base64.b64encode(f"{username}:{token}".encode()).decode("ascii")
-        return {"Authorization": f"Basic {encoded}"}
-    if token:
-        return {"Authorization": f"Bearer {token}"}
-    return {}
-
-
-def _format_jenkins_job_path(job_name: str) -> str:
-    parts = [p.strip() for p in job_name.strip("/").split("/") if p.strip()]
-    return "/".join(f"job/{urllib.parse.quote(part)}" for part in parts)
 
 
 class JenkinsJobPreCheck(PreCheck):
@@ -72,9 +57,9 @@ class JenkinsJobPreCheck(PreCheck):
                 message="JENKINS_URL is not configured.",
             )
 
-        job_path = _format_jenkins_job_path(unit.jenkins_job)
+        job_path = format_jenkins_job_path(unit.jenkins_job)
         api_url = f"{jenkins_url}/{job_path}/lastBuild/api/json"
-        headers = _build_jenkins_headers(
+        headers = build_jenkins_headers(
             context.settings.jenkins_username, context.settings.jenkins_token
         )
 

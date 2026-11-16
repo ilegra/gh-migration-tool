@@ -11,6 +11,8 @@ from pathlib import Path
 import jwt
 import requests
 
+from gh_migration_tool._http import github_headers
+
 logger = logging.getLogger(__name__)
 
 
@@ -46,11 +48,12 @@ class GitHubAppTokenProvider:
             return private_key.strip()
         if private_key_path and str(private_key_path).strip():
             path = Path(str(private_key_path).strip())
-            if not path.exists() or not path.is_file():
+            try:
+                content = path.read_text(encoding="utf-8").strip()
+            except (FileNotFoundError, IsADirectoryError) as exc:
                 raise FileNotFoundError(
                     f"GitHub App private key file not found: '{path}'."
-                )
-            content = path.read_text(encoding="utf-8").strip()
+                ) from exc
             if not content:
                 raise ValueError(f"GitHub App private key file is empty: '{path}'.")
             return content
@@ -79,11 +82,7 @@ class GitHubAppTokenProvider:
             url = (
                 f"{self.api_url}/app/installations/{self.installation_id}/access_tokens"
             )
-            headers = {
-                "Authorization": f"Bearer {app_jwt}",
-                "Accept": "application/vnd.github+json",
-                "X-GitHub-Api-Version": "2022-11-28",
-            }
+            headers = github_headers(app_jwt)
             logger.debug(
                 "Requesting GitHub App installation token for installation %s",
                 self.installation_id,

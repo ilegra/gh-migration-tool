@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import logging
 import shutil
 import subprocess  # nosec B404
@@ -52,11 +53,16 @@ def build_authenticated_origin_url(
     )
 
 
+@functools.lru_cache(maxsize=1)
+def _resolve_git_bin() -> str:
+    return shutil.which("git") or "/usr/bin/git"
+
+
 def capture_origin_branch_heads(
     origin_url: str, token: str, username: str | None = None
 ) -> dict[str, str]:
     """Run git ls-remote --heads against Origin and return {branch: sha}."""
-    git_bin = shutil.which("git") or "/usr/bin/git"
+    git_bin = _resolve_git_bin()
     auth_url = build_authenticated_origin_url(origin_url, token, username)
     proc = subprocess.run(  # nosec B603
         [git_bin, "ls-remote", "--heads", auth_url],

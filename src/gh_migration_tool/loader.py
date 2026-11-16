@@ -6,15 +6,15 @@ import json
 import logging
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import Any, cast, get_args
 
 import yaml
 
-from gh_migration_tool.models import MigrationUnit
+from gh_migration_tool.models import MigrationUnit, RepoVisibility
 
 logger = logging.getLogger(__name__)
 
-_VALID_VISIBILITIES = ("private", "internal", "public")
+_VALID_VISIBILITIES = get_args(RepoVisibility)
 
 
 class WaveLoader(ABC):
@@ -43,11 +43,14 @@ class FileWaveLoader(WaveLoader):
         """
         if not isinstance(source, Path):
             raise TypeError("source must be a pathlib.Path instance.")
-        if not source.exists() or not source.is_file():
-            raise FileNotFoundError(f"Wave manifest file not found: '{source}'.")
 
         suffix = source.suffix.lower()
-        raw_text = source.read_text(encoding="utf-8")
+        try:
+            raw_text = source.read_text(encoding="utf-8")
+        except (FileNotFoundError, IsADirectoryError) as exc:
+            raise FileNotFoundError(
+                f"Wave manifest file not found: '{source}'."
+            ) from exc
 
         if suffix in (".yaml", ".yml"):
             parsed = yaml.safe_load(raw_text)
@@ -119,7 +122,7 @@ class FileWaveLoader(WaveLoader):
             destination_exclusive_paths=list(
                 raw.get("destination_exclusive_paths") or []
             ),
-            visibility=cast(Literal["private", "internal", "public"], visibility),
+            visibility=cast(RepoVisibility, visibility),
             teams=dict(raw.get("teams") or {}),
             rulesets=list(raw.get("rulesets") or []),
             jenkins_job=raw.get("jenkins_job"),

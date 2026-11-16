@@ -7,6 +7,8 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Literal
 
+RepoVisibility = Literal["private", "internal", "public"]
+
 
 class UnitStatus(str, Enum):
     """Canonical terminal statuses for a Migration Unit in a Migration Wave."""
@@ -33,7 +35,7 @@ class MigrationUnit:
     branch_mapping: dict[str, str] = field(default_factory=dict)
     origin_exclusive_paths: list[str] = field(default_factory=list)
     destination_exclusive_paths: list[str] = field(default_factory=list)
-    visibility: Literal["private", "internal", "public"] = "private"
+    visibility: RepoVisibility = "private"
     teams: dict[str, str] = field(default_factory=dict)
     rulesets: list[dict[str, Any]] = field(default_factory=list)
     jenkins_job: str | None = None

@@ -48,7 +48,7 @@ class ReportFormatter:
             "## Status Summary",
             "",
         ]
-        for status in UnitStatus:
+        for status in UnitStatus.__members__.values():
             lines.append(f"- `{status.value}`: {report.status_counts.get(status, 0)}")
 
         lines.extend(
@@ -89,7 +89,7 @@ class ReportFormatter:
             f"Migration Wave Complete ({report.total_units} units)",
             "-" * 50,
         ]
-        for status in UnitStatus:
+        for status in UnitStatus.__members__.values():
             count = report.status_counts.get(status, 0)
             if count > 0:
                 lines.append(f"  {status.value}: {count}")

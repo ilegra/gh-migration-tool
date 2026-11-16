@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypeVar
 
 from gh_migration_tool.models import (
     CheckResult,
@@ -16,6 +17,28 @@ from gh_migration_tool.models import (
 if TYPE_CHECKING:
     from gh_migration_tool.auth.github_app import GitHubAppTokenProvider
     from gh_migration_tool.settings import MigrationSettings
+
+_T = TypeVar("_T")
+
+
+def run_parallel_by_unit(
+    units: list[MigrationUnit],
+    fn: Callable[[MigrationUnit], _T],
+    max_workers: int,
+    *,
+    executor: ThreadPoolExecutor | None = None,
+) -> dict[str, _T]:
+    """Execute fn concurrently for each MigrationUnit and map results by unit name."""
+    if not units:
+        return {}
+    if executor is None:
+        with ThreadPoolExecutor(max_workers=max(1, max_workers)) as own_executor:
+            return run_parallel_by_unit(units, fn, max_workers, executor=own_executor)
+    future_to_name = {executor.submit(fn, unit): unit.name for unit in units}
+    return {
+        future_to_name[future]: future.result()
+        for future in as_completed(future_to_name)
+    }
 
 
 class WaveContext:
@@ -54,27 +77,17 @@ class GitHubSetup(ABC):
         Subclasses performing bulk IaC provisioning may override this method
         to operate on the full batch of Candidates at once.
         """
-        results: dict[str, SetupResult] = {}
-        if not candidates:
-            return results
+        def _run_unit(unit: MigrationUnit) -> SetupResult:
+            try:
+                return self.setup_unit(unit, context)
+            except Exception as exc:
+                return SetupResult(
+                    unit_name=unit.name,
+                    passed=False,
+                    message=str(exc),
+                )
 
-        max_workers = max(1, context.settings.max_workers)
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            future_to_name = {
-                executor.submit(self.setup_unit, unit, context): unit.name
-                for unit in candidates
-            }
-            for future in as_completed(future_to_name):
-                unit_name = future_to_name[future]
-                try:
-                    results[unit_name] = future.result()
-                except Exception as exc:
-                    results[unit_name] = SetupResult(
-                        unit_name=unit_name,
-                        passed=False,
-                        message=str(exc),
-                    )
-        return results
+        return run_parallel_by_unit(candidates, _run_unit, context.settings.max_workers)
 
     @abstractmethod
     def setup_unit(self, unit: MigrationUnit, context: WaveContext) -> SetupResult:

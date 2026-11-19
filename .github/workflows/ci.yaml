@@ -37,7 +37,7 @@ jobs:
               - '.github/workflows/ci.yaml'
 
   lint-and-format:
-    name: Lint & Type Check (Ruff & Mypy)
+    name: Lint & Static Analysis
     needs: [filter]
     if: needs.filter.outputs.code == 'true' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
@@ -136,7 +136,7 @@ jobs:
         run: rm -f gcp-key.json
 
   security-gitleaks:
-    name: Security - Gitleaks Secret Scan
+    name: Gitleaks Secret Scan
     needs: [filter]
     if: needs.filter.outputs.code == 'true' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
@@ -202,7 +202,7 @@ jobs:
         run: poetry run bandit -r src
 
   security-codeql:
-    name: Security - CodeQL SAST Analysis
+    name: CodeQL SAST Analysis
     needs: [filter]
     if: needs.filter.outputs.code == 'true' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04

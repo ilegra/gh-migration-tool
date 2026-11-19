@@ -48,6 +48,83 @@ def test_given_https_origin_url_when_building_authenticated_url_then_embeds_cred
     assert url == "https://user:secret@dev.azure.com/org/proj/_git/repo"
 
 
+def test_given_bitbucket_provider_and_no_username_when_building_authenticated_url_then_uses_x_token_auth() -> (
+    None
+):
+    for provider in ("bitbucket", "bitbucket_cloud", "bitbucket-cloud", " Bitbucket "):
+        url = build_authenticated_origin_url(
+            "https://git.internal.example/ws/repo.git",
+            token="bb_tok",
+            username=None,
+            origin_provider=provider,
+        )
+        assert url == "https://x-token-auth:bb_tok@git.internal.example/ws/repo.git"
+
+
+def test_given_bitbucket_url_and_no_provider_or_username_when_building_authenticated_url_then_uses_x_token_auth() -> (
+    None
+):
+    url = build_authenticated_origin_url(
+        "https://bitbucket.org/ws/repo.git",
+        token="bb_tok",
+    )
+
+    assert url == "https://x-token-auth:bb_tok@bitbucket.org/ws/repo.git"
+
+
+def test_given_bitbucket_provider_and_explicit_username_when_building_authenticated_url_then_uses_explicit_username() -> (
+    None
+):
+    url = build_authenticated_origin_url(
+        "https://bitbucket.org/ws/repo.git",
+        token="bb_tok",
+        username="bb_user",
+        origin_provider="bitbucket",
+    )
+
+    assert url == "https://bb_user:bb_tok@bitbucket.org/ws/repo.git"
+
+
+def test_given_non_bitbucket_provider_and_bitbucket_url_when_building_authenticated_url_then_uses_x_access_token() -> (
+    None
+):
+    url = build_authenticated_origin_url(
+        "https://bitbucket.org/ws/repo.git",
+        token="ado_tok",
+        username=None,
+        origin_provider="ado",
+    )
+
+    assert url == "https://x-access-token:ado_tok@bitbucket.org/ws/repo.git"
+
+
+def test_given_bitbucket_provider_when_capturing_heads_then_passes_x_token_auth_url_to_git() -> (
+    None
+):
+    fake_proc = SimpleNamespace(
+        returncode=0,
+        stdout="abc123\trefs/heads/main\n",
+        stderr="",
+    )
+    with patch(
+        "gh_migration_tool.stages.migration.subprocess.run", return_value=fake_proc
+    ) as mock_run:
+        heads = capture_origin_branch_heads(
+            "https://bitbucket.org/ws/repo.git",
+            "bb_tok",
+            username=None,
+            origin_provider="bitbucket",
+        )
+
+    assert heads == {"main": "abc123"}
+    cmd = mock_run.call_args[0][0]
+    assert cmd[1:] == [
+        "ls-remote",
+        "--heads",
+        "https://x-token-auth:bb_tok@bitbucket.org/ws/repo.git",
+    ]
+
+
 def test_given_git_ls_remote_output_when_capturing_heads_then_returns_branch_sha_map() -> (
     None
 ):
@@ -114,7 +191,7 @@ def test_given_successful_sync_manager_when_migrating_then_returns_snapshot_and_
         patch(
             "gh_migration_tool.stages.migration.capture_origin_branch_heads",
             return_value={"main": "sha1"},
-        ),
+        ) as mock_capture,
         patch("gh_migration_tool.stages.migration.Git"),
         patch("gh_migration_tool.stages.migration.get_origin_provider"),
         patch("gh_migration_tool.stages.migration.GitHubProvider"),
@@ -123,7 +200,15 @@ def test_given_successful_sync_manager_when_migrating_then_returns_snapshot_and_
             return_value=mock_manager,
         ),
     ):
-        res = GitSyncMigrator().migrate(_unit(), _context())
+        unit = _unit()
+        res = GitSyncMigrator().migrate(unit, _context())
+
+    mock_capture.assert_called_once_with(
+        unit.origin_url,
+        "ado_tok",
+        None,
+        unit.origin_provider,
+    )
 
     assert res.unit_name == "service-a"
     assert res.passed is True
@@ -153,7 +238,7 @@ def test_given_disabled_origin_repo_when_migrating_then_returns_failed_result() 
         patch(
             "gh_migration_tool.stages.migration.capture_origin_branch_heads",
             return_value={"main": "sha1"},
-        ),
+        ) as mock_capture,
         patch("gh_migration_tool.stages.migration.Git"),
         patch("gh_migration_tool.stages.migration.get_origin_provider"),
         patch("gh_migration_tool.stages.migration.GitHubProvider"),
@@ -162,7 +247,15 @@ def test_given_disabled_origin_repo_when_migrating_then_returns_failed_result() 
             return_value=mock_manager,
         ),
     ):
-        res = GitSyncMigrator().migrate(_unit(), _context())
+        unit = _unit()
+        res = GitSyncMigrator().migrate(unit, _context())
+
+    mock_capture.assert_called_once_with(
+        unit.origin_url,
+        "ado_tok",
+        None,
+        unit.origin_provider,
+    )
 
     assert res.unit_name == "service-a"
     assert res.passed is False

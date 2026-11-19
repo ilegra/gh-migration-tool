@@ -120,6 +120,30 @@ def test_given_ls_remote_error_when_checking_drift_then_fails() -> None:
     assert res.details == {}
 
 
+def test_given_bitbucket_unit_when_checking_drift_then_forwards_origin_provider_to_ls_remote() -> (
+    None
+):
+    captured_args: list[tuple[object, ...]] = []
+
+    def _fake_ls_remote(*args: object) -> dict[str, str]:
+        captured_args.append(args)
+        return {"main": "sha1"}
+
+    unit = MigrationUnit(
+        name="bb-service",
+        origin_url="https://bitbucket.org/ws/bb-service.git",
+        destination_url="https://github.com/org/bb-service.git",
+        origin_provider="bitbucket",
+    )
+    check = SourceDriftPostCheck(ls_remote_fn=_fake_ls_remote)
+    res = check.execute(unit, _mig_result({"main": "sha1"}), _context())
+
+    assert res.passed is True
+    assert captured_args == [
+        ("https://bitbucket.org/ws/bb-service.git", "", None, "bitbucket")
+    ]
+
+
 @responses.activate
 def test_given_successful_jenkins_trigger_when_executing_post_check_then_passes() -> (
     None

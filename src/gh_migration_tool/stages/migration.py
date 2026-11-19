@@ -27,8 +27,27 @@ from gh_migration_tool.models import (
 logger = logging.getLogger(__name__)
 
 
+_BITBUCKET_PROVIDERS = frozenset({"bitbucket", "bitbucket_cloud", "bitbucket-cloud"})
+
+
+def _default_origin_username(
+    parsed_url: urllib.parse.ParseResult, origin_provider: str | None = None
+) -> str:
+    explicit = (origin_provider or "").strip().lower()
+    if explicit:
+        return "x-token-auth" if explicit in _BITBUCKET_PROVIDERS else "x-access-token"
+
+    hostname = (parsed_url.hostname or "").lower()
+    if hostname == "bitbucket.org" or hostname.endswith(".bitbucket.org"):
+        return "x-token-auth"
+    return "x-access-token"
+
+
 def build_authenticated_origin_url(
-    origin_url: str, token: str, username: str | None = None
+    origin_url: str,
+    token: str,
+    username: str | None = None,
+    origin_provider: str | None = None,
 ) -> str:
     """Inject authentication credentials into an HTTPS origin URL."""
     if not token:
@@ -36,7 +55,8 @@ def build_authenticated_origin_url(
     parsed = urllib.parse.urlparse(origin_url)
     if parsed.scheme not in ("http", "https"):
         return origin_url
-    user = urllib.parse.quote(username or "x-access-token", safe="")
+    effective_user = username or _default_origin_username(parsed, origin_provider)
+    user = urllib.parse.quote(effective_user, safe="")
     secret = urllib.parse.quote(token, safe="")
     netloc = f"{user}:{secret}@{parsed.hostname}"
     if parsed.port:
@@ -59,11 +79,16 @@ def _resolve_git_bin() -> str:
 
 
 def capture_origin_branch_heads(
-    origin_url: str, token: str, username: str | None = None
+    origin_url: str,
+    token: str,
+    username: str | None = None,
+    origin_provider: str | None = None,
 ) -> dict[str, str]:
     """Run git ls-remote --heads against Origin and return {branch: sha}."""
     git_bin = _resolve_git_bin()
-    auth_url = build_authenticated_origin_url(origin_url, token, username)
+    auth_url = build_authenticated_origin_url(
+        origin_url, token, username, origin_provider
+    )
     proc = subprocess.run(  # nosec B603
         [git_bin, "ls-remote", "--heads", auth_url],
         capture_output=True,
@@ -104,6 +129,7 @@ class GitSyncMigrator(Migrator):
                 unit.origin_url,
                 context.settings.origin_token,
                 context.settings.origin_username,
+                unit.origin_provider,
             )
             snapshot = OriginSnapshot(
                 captured_at=datetime.now(timezone.utc),

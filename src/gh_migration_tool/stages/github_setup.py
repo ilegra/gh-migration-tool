@@ -8,7 +8,11 @@ from typing import Any
 
 import requests
 
-from gh_migration_tool._http import github_headers
+from gh_migration_tool._http import (
+    DEFAULT_HTTP_TIMEOUT_SECONDS,
+    build_http_session,
+    github_headers,
+)
 from gh_migration_tool.interfaces import GitHubSetup, WaveContext
 from gh_migration_tool.models import MigrationUnit, SetupResult
 
@@ -52,7 +56,7 @@ class VerifyRepoExistsGitHubSetup(GitHubSetup):
     """Verifies that the target GitHub repository already exists (e.g. via IaC)."""
 
     def __init__(self, session: requests.Session | None = None) -> None:
-        self._session = session or requests.Session()
+        self._session = session or build_http_session()
 
     def setup_unit(self, unit: MigrationUnit, context: WaveContext) -> SetupResult:
         """Verify destination repository existence on GitHub."""
@@ -67,7 +71,22 @@ class VerifyRepoExistsGitHubSetup(GitHubSetup):
         owner, repo, api_url, headers = target
         url = f"{api_url}/repos/{owner}/{repo}"
 
-        response = self._session.get(url, headers=headers, timeout=30)
+        try:
+            response = self._session.get(
+                url, headers=headers, timeout=context.settings.http_timeout_seconds
+            )
+        except requests.RequestException as exc:
+            logger.error(
+                "GitHub repository verification failed for '%s/%s': %s",
+                owner,
+                repo,
+                exc,
+            )
+            return SetupResult(
+                unit_name=unit.name,
+                passed=False,
+                message=f"Repository '{owner}/{repo}' verification failed: {exc}",
+            )
         if response.status_code == 200:
             return SetupResult(
                 unit_name=unit.name,
@@ -90,7 +109,7 @@ class GitHubApiSetup(GitHubSetup):
     """Idempotently creates/reuses a GitHub repo and reconciles teams and rulesets."""
 
     def __init__(self, session: requests.Session | None = None) -> None:
-        self._session = session or requests.Session()
+        self._session = session or build_http_session()
 
     def setup_unit(self, unit: MigrationUnit, context: WaveContext) -> SetupResult:
         """Ensure GitHub repository exists, then apply teams and rulesets."""
@@ -103,10 +122,19 @@ class GitHubApiSetup(GitHubSetup):
             )
 
         owner, repo, api_url, headers = target
+        timeout = context.settings.http_timeout_seconds
 
         created = False
         repo_url = f"{api_url}/repos/{owner}/{repo}"
-        get_resp = self._session.get(repo_url, headers=headers, timeout=30)
+        try:
+            get_resp = self._session.get(repo_url, headers=headers, timeout=timeout)
+        except requests.RequestException as exc:
+            logger.error("Failed to inspect repository '%s/%s': %s", owner, repo, exc)
+            return SetupResult(
+                unit_name=unit.name,
+                passed=False,
+                message=f"Failed to inspect repository '{owner}/{repo}': {exc}",
+            )
 
         if get_resp.status_code == 404:
             create_url = f"{api_url}/orgs/{owner}/repos"
@@ -115,9 +143,19 @@ class GitHubApiSetup(GitHubSetup):
                 "visibility": unit.visibility,
                 "private": unit.visibility != "public",
             }
-            create_resp = self._session.post(
-                create_url, headers=headers, json=payload, timeout=30
-            )
+            try:
+                create_resp = self._session.post(
+                    create_url, headers=headers, json=payload, timeout=timeout
+                )
+            except requests.RequestException as exc:
+                logger.error(
+                    "Failed to create repository '%s/%s': %s", owner, repo, exc
+                )
+                return SetupResult(
+                    unit_name=unit.name,
+                    passed=False,
+                    message=f"Failed to create repository '{owner}/{repo}': {exc}",
+                )
             if create_resp.status_code in (200, 201):
                 created = True
             elif create_resp.status_code == 422:
@@ -144,12 +182,30 @@ class GitHubApiSetup(GitHubSetup):
 
         for team_slug, permission in unit.teams.items():
             team_url = f"{api_url}/orgs/{owner}/teams/{team_slug}/repos/{owner}/{repo}"
-            team_resp = self._session.put(
-                team_url,
-                headers=headers,
-                json={"permission": permission},
-                timeout=30,
-            )
+            try:
+                team_resp = self._session.put(
+                    team_url,
+                    headers=headers,
+                    json={"permission": permission},
+                    timeout=timeout,
+                )
+            except requests.RequestException as exc:
+                logger.error(
+                    "Failed to assign team '%s' to '%s/%s': %s",
+                    team_slug,
+                    owner,
+                    repo,
+                    exc,
+                )
+                return SetupResult(
+                    unit_name=unit.name,
+                    passed=False,
+                    created=created,
+                    message=(
+                        f"Failed to assign team '{team_slug}' to "
+                        f"'{owner}/{repo}': {exc}"
+                    ),
+                )
             if team_resp.status_code not in (200, 201, 204):
                 return SetupResult(
                     unit_name=unit.name,
@@ -162,18 +218,39 @@ class GitHubApiSetup(GitHubSetup):
                 )
 
         if unit.rulesets:
-            existing_rulesets = self._list_rulesets(api_url, owner, repo, headers)
-            for ruleset in unit.rulesets:
-                ok, err = self._reconcile_ruleset(
-                    api_url, owner, repo, headers, ruleset, existing_rulesets
+            try:
+                existing_rulesets = self._list_rulesets(
+                    api_url, owner, repo, headers, timeout=timeout
                 )
-                if not ok:
-                    return SetupResult(
-                        unit_name=unit.name,
-                        passed=False,
-                        created=created,
-                        message=err,
+                for ruleset in unit.rulesets:
+                    ok, err = self._reconcile_ruleset(
+                        api_url,
+                        owner,
+                        repo,
+                        headers,
+                        ruleset,
+                        existing_rulesets,
+                        timeout=timeout,
                     )
+                    if not ok:
+                        return SetupResult(
+                            unit_name=unit.name,
+                            passed=False,
+                            created=created,
+                            message=err,
+                        )
+            except requests.RequestException as exc:
+                logger.error(
+                    "Failed to reconcile rulesets on '%s/%s': %s", owner, repo, exc
+                )
+                return SetupResult(
+                    unit_name=unit.name,
+                    passed=False,
+                    created=created,
+                    message=(
+                        f"Failed to reconcile rulesets on '{owner}/{repo}': {exc}"
+                    ),
+                )
 
         return SetupResult(
             unit_name=unit.name,
@@ -183,10 +260,15 @@ class GitHubApiSetup(GitHubSetup):
         )
 
     def _list_rulesets(
-        self, api_url: str, owner: str, repo: str, headers: dict[str, str]
+        self,
+        api_url: str,
+        owner: str,
+        repo: str,
+        headers: dict[str, str],
+        timeout: float = DEFAULT_HTTP_TIMEOUT_SECONDS,
     ) -> dict[str, int]:
         url = f"{api_url}/repos/{owner}/{repo}/rulesets"
-        resp = self._session.get(url, headers=headers, timeout=30)
+        resp = self._session.get(url, headers=headers, timeout=timeout)
         if resp.status_code != 200:
             return {}
         items = resp.json()
@@ -206,15 +288,20 @@ class GitHubApiSetup(GitHubSetup):
         headers: dict[str, str],
         ruleset: dict[str, Any],
         existing: dict[str, int],
+        timeout: float = DEFAULT_HTTP_TIMEOUT_SECONDS,
     ) -> tuple[bool, str]:
         name = str(ruleset.get("name", "")).strip()
         if name and name in existing:
             ruleset_id = existing[name]
             url = f"{api_url}/repos/{owner}/{repo}/rulesets/{ruleset_id}"
-            resp = self._session.put(url, headers=headers, json=ruleset, timeout=30)
+            resp = self._session.put(
+                url, headers=headers, json=ruleset, timeout=timeout
+            )
         else:
             url = f"{api_url}/repos/{owner}/{repo}/rulesets"
-            resp = self._session.post(url, headers=headers, json=ruleset, timeout=30)
+            resp = self._session.post(
+                url, headers=headers, json=ruleset, timeout=timeout
+            )
 
         if resp.status_code in (200, 201):
             return True, ""

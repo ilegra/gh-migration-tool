@@ -5,35 +5,23 @@ from __future__ import annotations
 import logging
 
 import requests
-from requests.adapters import HTTPAdapter
-from urllib3.util import Retry
 
-from gh_migration_tool._http import build_jenkins_headers, format_jenkins_job_path
+from gh_migration_tool._http import (
+    build_http_session,
+    build_jenkins_headers,
+    format_jenkins_job_path,
+)
 from gh_migration_tool.interfaces import PreCheck, WaveContext
 from gh_migration_tool.models import CheckResult, MigrationUnit
 
 logger = logging.getLogger(__name__)
 
 
-def _build_jenkins_session() -> requests.Session:
-    session = requests.Session()
-    retry = Retry(
-        total=3,
-        backoff_factor=0.5,
-        status_forcelist=[429, 500, 502, 503, 504],
-        allowed_methods=["GET"],
-    )
-    adapter = HTTPAdapter(max_retries=retry)
-    session.mount("https://", adapter)
-    session.mount("http://", adapter)
-    return session
-
-
 class JenkinsJobPreCheck(PreCheck):
     """Verifies that a Migration Unit's latest Jenkins build succeeded."""
 
     def __init__(self, session: requests.Session | None = None) -> None:
-        self._session = session or _build_jenkins_session()
+        self._session = session or build_http_session(allowed_methods={"GET"})
 
     @property
     def name(self) -> str:
@@ -64,7 +52,11 @@ class JenkinsJobPreCheck(PreCheck):
         )
 
         try:
-            response = self._session.get(api_url, headers=headers, timeout=30)
+            response = self._session.get(
+                api_url,
+                headers=headers,
+                timeout=context.settings.http_timeout_seconds,
+            )
         except requests.RequestException as exc:
             logger.error(
                 "Jenkins pre-check request failed for unit '%s': %s", unit.name, exc

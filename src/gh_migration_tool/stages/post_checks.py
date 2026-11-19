@@ -26,7 +26,7 @@ class SourceDriftPostCheck(PostCheck):
 
     def __init__(
         self,
-        ls_remote_fn: Callable[[str, str, str | None], dict[str, str]] | None = None,
+        ls_remote_fn: Callable[..., dict[str, str]] | None = None,
     ) -> None:
         self._ls_remote = ls_remote_fn or capture_origin_branch_heads
 
@@ -55,6 +55,7 @@ class SourceDriftPostCheck(PostCheck):
                 unit.origin_url,
                 context.settings.origin_token,
                 context.settings.origin_username,
+                unit.origin_provider,
             )
         except Exception as exc:
             return CheckResult(

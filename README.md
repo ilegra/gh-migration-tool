@@ -309,7 +309,7 @@ Because `gh-migration-tool` orchestrates multiple external systems (`gh-repo-syn
 
 #### A. Origin SCM Credentials (Required for `gh-repo-sync` & `SourceDriftPostCheck`)
 - `ORIGIN_TOKEN`: Personal Access Token or HTTP access token with read permissions on the origin repositories.
-- `ORIGIN_USERNAME`: Optional HTTP Basic Auth username (defaults to `x-access-token` when omitted). **Required** for platforms such as Bitbucket or Azure DevOps where the username is significant.
+- `ORIGIN_USERNAME`: Optional HTTP Basic Auth username (defaults to `x-token-auth` for Bitbucket Cloud token-only auth, or `x-access-token` otherwise). Leave unset when using Bitbucket Repository/Workspace/Project Access Tokens.
 - In your Wave Manifest, set `origin_provider` (e.g., `gitlab`, `bitbucket`, `azure_devops`, `github`) so `gh-repo-sync` selects the right origin provider.
 
 #### B. Target GitHub App Setup (Required for `GitHubSetup`, `GitSyncMigrator`, & `GitHubActionsTriggerPostCheck`)
@@ -345,7 +345,7 @@ cp .env.example .env
 | Variable | Required? | Default | Used By | Description |
 | :--- | :--- | :--- | :--- | :--- |
 | `ORIGIN_TOKEN` | Yes (private origins) | `""` | Stage 4, Stage 5 (`SourceDriftPostCheck`) | Origin SCM access token for `git ls-remote` and `gh-repo-sync`. |
-| `ORIGIN_USERNAME` | Conditional | `None` | Stage 4, Stage 5 (`SourceDriftPostCheck`) | Origin SCM username (defaults to `x-access-token` if unset). |
+| `ORIGIN_USERNAME` | Conditional | `None` | Stage 4, Stage 5 (`SourceDriftPostCheck`) | Origin SCM username (defaults to `x-token-auth` for Bitbucket Cloud, or `x-access-token` otherwise). |
 | `GITHUB_APP_ID` | Yes | `""` | Stages 3, 4, 5 | Numeric GitHub App ID. |
 | `GITHUB_APP_INSTALLATION_ID` | Yes | `""` | Stages 3, 4, 5 | GitHub App Installation ID on target org. |
 | `GITHUB_APP_PRIVATE_KEY` | Yes (or `_PATH`) | `""` | Stages 3, 4, 5 | GitHub App RSA private key PEM content. |

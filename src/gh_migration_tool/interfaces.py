@@ -11,6 +11,7 @@ from gh_migration_tool.models import (
     CheckResult,
     MigrationStageResult,
     MigrationUnit,
+    PipelineMigrationResult,
     SetupResult,
 )
 
@@ -103,6 +104,24 @@ class Migrator(ABC):
         self, unit: MigrationUnit, context: WaveContext
     ) -> MigrationStageResult:
         """Synchronize the Migration Unit from Origin to GitHub."""
+
+
+class PipelineMigrator(ABC):
+    """Extensible interface for optional post-migration hooks before Post-checks."""
+
+    @property
+    @abstractmethod
+    def name(self) -> str:
+        """Human-readable identifier for this PipelineMigrator."""
+
+    @abstractmethod
+    def execute(
+        self,
+        unit: MigrationUnit,
+        migration_result: MigrationStageResult,
+        context: WaveContext,
+    ) -> PipelineMigrationResult:
+        """Execute a mutating post-migration step for a single Migration Unit."""
 
 
 class PostCheck(ABC):

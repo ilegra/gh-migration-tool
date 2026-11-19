@@ -51,6 +51,7 @@ def test_given_execution_records_when_building_and_formatting_report_then_render
         UnitStatus.BLOCKED_BY_GROUP: 0,
         UnitStatus.GITHUB_SETUP_FAILED: 0,
         UnitStatus.MIGRATION_FAILED: 1,
+        UnitStatus.PIPELINE_MIGRATION_FAILED: 0,
         UnitStatus.POST_CHECK_FAILED: 0,
         UnitStatus.INVENTORY_UPDATE_FAILED: 0,
     }

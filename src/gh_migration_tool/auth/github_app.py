@@ -11,7 +11,11 @@ from pathlib import Path
 import jwt
 import requests
 
-from gh_migration_tool._http import github_headers
+from gh_migration_tool._http import (
+    DEFAULT_HTTP_TIMEOUT_SECONDS,
+    build_http_session,
+    github_headers,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +31,7 @@ class GitHubAppTokenProvider:
         private_key_path: str | None = None,
         api_url: str = "https://api.github.com",
         session: requests.Session | None = None,
+        timeout: float = DEFAULT_HTTP_TIMEOUT_SECONDS,
     ) -> None:
         if not app_id or not str(app_id).strip():
             raise ValueError("GitHub App ID cannot be empty.")
@@ -37,7 +42,8 @@ class GitHubAppTokenProvider:
         self.installation_id = str(installation_id).strip()
         self.api_url = api_url.rstrip("/")
         self._private_key = self._resolve_private_key(private_key, private_key_path)
-        self._session = session or requests.Session()
+        self._timeout = timeout
+        self._session = session or build_http_session(timeout=timeout)
         self._lock = threading.Lock()
         self._cached_token: str | None = None
         self._expires_at_epoch: float = 0.0
@@ -87,7 +93,14 @@ class GitHubAppTokenProvider:
                 "Requesting GitHub App installation token for installation %s",
                 self.installation_id,
             )
-            response = self._session.post(url, headers=headers, timeout=30)
+            try:
+                response = self._session.post(
+                    url, headers=headers, timeout=self._timeout
+                )
+            except requests.RequestException as exc:
+                raise RuntimeError(
+                    f"Failed to obtain GitHub App installation token: {exc}"
+                ) from exc
             if response.status_code not in (200, 201):
                 raise RuntimeError(
                     f"Failed to obtain GitHub App installation token: "

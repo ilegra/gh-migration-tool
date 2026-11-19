@@ -5,6 +5,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 import pytest
+import requests
 import responses
 
 from gh_migration_tool.interfaces import WaveContext
@@ -177,6 +178,56 @@ def test_given_missing_token_provider_when_running_setup_then_returns_failed() -
     assert res.passed is False
     assert res.created is False
     assert "GitHubAppTokenProvider" in res.message
+
+
+@responses.activate
+def test_given_transient_503_when_verifying_repo_exists_then_retries_and_passes() -> (
+    None
+):
+    responses.add(
+        responses.GET,
+        "https://api.github.com/repos/my-org/service-a",
+        status=503,
+    )
+    responses.add(
+        responses.GET,
+        "https://api.github.com/repos/my-org/service-a",
+        json={"name": "service-a"},
+        status=200,
+    )
+
+    res = VerifyRepoExistsGitHubSetup().setup_unit(_unit(), _context())
+
+    assert res.unit_name == "service-a"
+    assert res.passed is True
+    assert res.created is False
+    assert len(responses.calls) == 2
+
+
+def test_given_network_error_when_verifying_repo_exists_then_returns_failed() -> None:
+    session = MagicMock()
+    session.get.side_effect = requests.Timeout("read timed out")
+
+    res = VerifyRepoExistsGitHubSetup(session=session).setup_unit(_unit(), _context())
+
+    assert res.unit_name == "service-a"
+    assert res.passed is False
+    assert res.created is False
+    assert "read timed out" in res.message
+
+
+def test_given_network_error_when_running_github_api_setup_then_returns_failed() -> (
+    None
+):
+    session = MagicMock()
+    session.get.side_effect = requests.ConnectionError("connection refused")
+
+    res = GitHubApiSetup(session=session).setup_unit(_unit(), _context())
+
+    assert res.unit_name == "service-a"
+    assert res.passed is False
+    assert res.created is False
+    assert "connection refused" in res.message
 
 
 def test_given_ssh_url_when_parsing_owner_repo_then_extracts_owner_and_repo() -> None:

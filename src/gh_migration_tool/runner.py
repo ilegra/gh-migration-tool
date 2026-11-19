@@ -85,6 +85,7 @@ class WaveRunner:
             private_key=settings.github_app_private_key,
             private_key_path=settings.github_app_private_key_path,
             api_url=settings.github_api_url,
+            timeout=settings.http_timeout_seconds,
         )
 
     def run(self, units: list[MigrationUnit]) -> WaveReport:

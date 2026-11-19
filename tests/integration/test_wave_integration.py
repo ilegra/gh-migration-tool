@@ -126,42 +126,60 @@ units:
         encoding="utf-8",
     )
 
+    def _commit_and_push_file(
+        repo_url: str,
+        work_dir: Path,
+        rel_path: str,
+        content: str,
+        commit_message: str,
+        push_refspec: str,
+        branch: str | None = None,
+    ) -> None:
+        clone_cmd = ["git", "clone"]
+        if branch is not None:
+            clone_cmd.extend(["--branch", branch])
+        clone_cmd.extend([repo_url, str(work_dir)])
+        subprocess.run(clone_cmd, check=True, capture_output=True, text=True)
+        subprocess.run(
+            ["git", "config", "user.email", "ci@example.com"],
+            cwd=work_dir,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Migration Bot"],
+            cwd=work_dir,
+            check=True,
+        )
+        target = work_dir / rel_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+        subprocess.run(["git", "add", rel_path], cwd=work_dir, check=True)
+        subprocess.run(
+            ["git", "commit", "-m", commit_message],
+            cwd=work_dir,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        subprocess.run(
+            ["git", "push", "origin", push_refspec],
+            cwd=work_dir,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
     class _GitMirrorMigrator(Migrator):
         def migrate(
             self, unit: MigrationUnit, context: WaveContext
         ) -> MigrationStageResult:
-            work = tmp_path / "mirror-work"
-            subprocess.run(
-                ["git", "clone", unit.destination_url, str(work)],
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-            subprocess.run(
-                ["git", "config", "user.email", "ci@example.com"],
-                cwd=work,
-                check=True,
-            )
-            subprocess.run(
-                ["git", "config", "user.name", "Migration Bot"],
-                cwd=work,
-                check=True,
-            )
-            (work / "README.md").write_text("# Demo Repo\n", encoding="utf-8")
-            subprocess.run(["git", "add", "README.md"], cwd=work, check=True)
-            subprocess.run(
-                ["git", "commit", "-m", "chore: initial mirror"],
-                cwd=work,
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-            subprocess.run(
-                ["git", "push", "origin", "HEAD:main"],
-                cwd=work,
-                check=True,
-                capture_output=True,
-                text=True,
+            _commit_and_push_file(
+                repo_url=unit.destination_url,
+                work_dir=tmp_path / "mirror-work",
+                rel_path="README.md",
+                content="# Demo Repo\n",
+                commit_message="chore: initial mirror",
+                push_refspec="HEAD:main",
             )
             return MigrationStageResult(
                 unit_name=unit.name,
@@ -184,42 +202,14 @@ units:
             migration_result: MigrationStageResult,
             context: WaveContext,
         ) -> PipelineMigrationResult:
-            work = tmp_path / "pipeline-work"
-            subprocess.run(
-                ["git", "clone", "--branch", "main", unit.destination_url, str(work)],
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-            subprocess.run(
-                ["git", "config", "user.email", "ci@example.com"],
-                cwd=work,
-                check=True,
-            )
-            subprocess.run(
-                ["git", "config", "user.name", "Migration Bot"],
-                cwd=work,
-                check=True,
-            )
-            wf_dir = work / ".github" / "workflows"
-            wf_dir.mkdir(parents=True, exist_ok=True)
-            (wf_dir / "ci.yml").write_text("name: CI\non: [push]\n", encoding="utf-8")
-            subprocess.run(
-                ["git", "add", ".github/workflows/ci.yml"], cwd=work, check=True
-            )
-            subprocess.run(
-                ["git", "commit", "-m", "ci: add migrated GitHub Actions workflow"],
-                cwd=work,
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-            subprocess.run(
-                ["git", "push", "origin", "main"],
-                cwd=work,
-                check=True,
-                capture_output=True,
-                text=True,
+            _commit_and_push_file(
+                repo_url=unit.destination_url,
+                work_dir=tmp_path / "pipeline-work",
+                rel_path=".github/workflows/ci.yml",
+                content="name: CI\non: [push]\n",
+                commit_message="ci: add migrated GitHub Actions workflow",
+                push_refspec="main",
+                branch="main",
             )
             return PipelineMigrationResult(
                 migrator_name=self.name,

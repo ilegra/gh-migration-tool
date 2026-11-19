@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
+import requests
 import responses
 
 from gh_migration_tool.interfaces import WaveContext
@@ -200,7 +201,58 @@ def test_given_jenkins_trigger_http_500_when_executing_post_check_then_fails() -
 
     assert res.check_name == "jenkins_trigger_post_check"
     assert res.passed is False
-    assert "HTTP 500" in res.message
+    assert "500 error responses" in res.message
+    assert res.details == {}
+
+
+@responses.activate
+def test_given_transient_503_on_jenkins_trigger_when_executing_post_check_then_retries_and_passes() -> (
+    None
+):
+    responses.add(
+        responses.GET,
+        "https://jenkins.example.com/crumbIssuer/api/json",
+        status=404,
+    )
+    responses.add(
+        responses.POST,
+        "https://jenkins.example.com/job/team/job/service-a/build",
+        status=503,
+    )
+    responses.add(
+        responses.POST,
+        "https://jenkins.example.com/job/team/job/service-a/build",
+        status=201,
+    )
+    responses.add(
+        responses.GET,
+        "https://jenkins.example.com/job/team/job/service-a/lastBuild/api/json",
+        json={"building": False, "result": "SUCCESS"},
+        status=200,
+    )
+
+    res = JenkinsTriggerPostCheck(sleep_fn=lambda _: None).execute(
+        _unit(), _mig_result(), _context()
+    )
+
+    assert res.check_name == "jenkins_trigger_post_check"
+    assert res.passed is True
+    assert "succeeded" in res.message
+
+
+def test_given_network_error_on_jenkins_trigger_when_executing_post_check_then_fails() -> (
+    None
+):
+    session = MagicMock()
+    session.get.side_effect = requests.Timeout("read timed out")
+
+    res = JenkinsTriggerPostCheck(session=session, sleep_fn=lambda _: None).execute(
+        _unit(), _mig_result(), _context()
+    )
+
+    assert res.check_name == "jenkins_trigger_post_check"
+    assert res.passed is False
+    assert "read timed out" in res.message
     assert res.details == {}
 
 
@@ -260,4 +312,20 @@ def test_given_missing_token_provider_when_executing_gh_post_check_then_fails() 
     assert res.check_name == "github_actions_trigger_post_check"
     assert res.passed is False
     assert "GitHubAppTokenProvider" in res.message
+    assert res.details == {}
+
+
+def test_given_network_error_on_gh_dispatch_when_executing_post_check_then_fails() -> (
+    None
+):
+    session = MagicMock()
+    session.post.side_effect = requests.ConnectionError("connection reset")
+
+    res = GitHubActionsTriggerPostCheck(
+        session=session, sleep_fn=lambda _: None
+    ).execute(_unit(), _mig_result(), _context())
+
+    assert res.check_name == "github_actions_trigger_post_check"
+    assert res.passed is False
+    assert "connection reset" in res.message
     assert res.details == {}

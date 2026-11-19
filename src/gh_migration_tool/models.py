@@ -18,6 +18,7 @@ class UnitStatus(str, Enum):
     BLOCKED_BY_GROUP = "BLOCKED_BY_GROUP"
     GITHUB_SETUP_FAILED = "GITHUB_SETUP_FAILED"
     MIGRATION_FAILED = "MIGRATION_FAILED"
+    PIPELINE_MIGRATION_FAILED = "PIPELINE_MIGRATION_FAILED"
     POST_CHECK_FAILED = "POST_CHECK_FAILED"
     INVENTORY_UPDATE_FAILED = "INVENTORY_UPDATE_FAILED"
 
@@ -87,6 +88,16 @@ class MigrationStageResult:
 
 
 @dataclass
+class PipelineMigrationResult:
+    """Outcome of a single PipelineMigrator execution."""
+
+    migrator_name: str
+    passed: bool
+    message: str = ""
+    details: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
 class InventoryUpdateResult:
     """Outcome of the Inventory Update stage for a single verified Migration Unit."""
 
@@ -105,6 +116,7 @@ class UnitExecutionRecord:
     pre_checks: list[CheckResult] = field(default_factory=list)
     setup_result: SetupResult | None = None
     migration_result: MigrationStageResult | None = None
+    pipeline_migrations: list[PipelineMigrationResult] = field(default_factory=list)
     post_checks: list[CheckResult] = field(default_factory=list)
     inventory_result: InventoryUpdateResult | None = None
     error_summary: str = ""

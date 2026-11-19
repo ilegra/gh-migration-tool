@@ -12,6 +12,7 @@ from gh_migration_tool.auth.github_app import GitHubAppTokenProvider
 from gh_migration_tool.interfaces import (
     GitHubSetup,
     Migrator,
+    PipelineMigrator,
     PostCheck,
     PreCheck,
     WaveContext,
@@ -21,6 +22,7 @@ from gh_migration_tool.models import (
     CheckResult,
     MigrationStageResult,
     MigrationUnit,
+    PipelineMigrationResult,
     UnitExecutionRecord,
     UnitStatus,
     WaveReport,
@@ -49,6 +51,7 @@ class WaveRunner:
         post_checks: list[PostCheck] | None = None,
         token_provider: GitHubAppTokenProvider | None = None,
         inventory_client: Any = None,
+        pipeline_migrators: Sequence[PipelineMigrator] | None = None,
     ) -> None:
         self.settings = settings
         self.pre_checks: list[PreCheck] = (
@@ -58,6 +61,9 @@ class WaveRunner:
         self.migrator: Migrator = migrator or GitSyncMigrator()
         self.post_checks: list[PostCheck] = (
             post_checks if post_checks is not None else [SourceDriftPostCheck()]
+        )
+        self.pipeline_migrators: list[PipelineMigrator] = (
+            list(pipeline_migrators) if pipeline_migrators is not None else []
         )
         self._token_provider = token_provider or self._build_token_provider(settings)
         self._inventory_client = inventory_client
@@ -128,12 +134,33 @@ class WaveRunner:
                         "; ".join(m_res.errors) or "Migration failed."
                     )
 
+            # Step 4.5: Optional PipelineMigrator hooks (sequential per unit)
+            pipeline_ready_units = migrated_units
+            if self.pipeline_migrators and migrated_units:
+                hook_results = self._run_pipeline_migrators(
+                    migrated_units, mig_results, context, max_workers, executor
+                )
+                pipeline_ready_units = []
+                for unit in migrated_units:
+                    unit_hooks = hook_results.get(unit.name, [])
+                    records[unit.name].pipeline_migrations = unit_hooks
+                    if all(h.passed for h in unit_hooks):
+                        pipeline_ready_units.append(unit)
+                    else:
+                        failed_msgs = [
+                            h.message for h in unit_hooks if not h.passed and h.message
+                        ]
+                        records[unit.name].status = UnitStatus.PIPELINE_MIGRATION_FAILED
+                        records[unit.name].error_summary = (
+                            "; ".join(failed_msgs) or "Pipeline migration failed."
+                        )
+
             # Step 5: Post-checks (parallel per unit & check)
             post_results = self._run_post_checks(
-                migrated_units, mig_results, context, executor
+                pipeline_ready_units, mig_results, context, executor
             )
             verified_units: list[MigrationUnit] = []
-            for unit in migrated_units:
+            for unit in pipeline_ready_units:
                 checks = post_results.get(unit.name, [])
                 records[unit.name].post_checks = checks
                 if all(c.passed for c in checks):
@@ -235,6 +262,40 @@ class WaveRunner:
 
         return run_parallel_by_unit(
             units, _migrate_unit, max_workers, executor=executor
+        )
+
+    def _run_pipeline_migrators(
+        self,
+        units: list[MigrationUnit],
+        mig_results: dict[str, MigrationStageResult],
+        context: WaveContext,
+        max_workers: int,
+        executor: ThreadPoolExecutor,
+    ) -> dict[str, list[PipelineMigrationResult]]:
+        def _run_unit_hooks(unit: MigrationUnit) -> list[PipelineMigrationResult]:
+            results: list[PipelineMigrationResult] = []
+            for hook in self.pipeline_migrators:
+                try:
+                    res = hook.execute(unit, mig_results[unit.name], context)
+                except Exception as exc:
+                    logger.error(
+                        "PipelineMigrator '%s' failed for unit '%s': %s",
+                        hook.name,
+                        unit.name,
+                        exc,
+                    )
+                    res = PipelineMigrationResult(
+                        migrator_name=hook.name,
+                        passed=False,
+                        message=str(exc),
+                    )
+                results.append(res)
+                if not res.passed:
+                    break
+            return results
+
+        return run_parallel_by_unit(
+            units, _run_unit_hooks, max_workers, executor=executor
         )
 
     def _run_post_checks(

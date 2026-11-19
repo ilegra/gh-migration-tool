@@ -90,6 +90,7 @@ flowchart LR
         PreCheck["PreCheck (ABC)"]
         GitHubSetup["GitHubSetup (ABC)"]
         Migrator["Migrator (ABC)"]
+        PipelineMigrator["PipelineMigrator (ABC, optional)"]
         PostCheck["PostCheck (ABC)"]
     end
 
@@ -103,6 +104,7 @@ flowchart LR
     Runner --> Prepare
     Runner --> GitHubSetup
     Runner --> Migrator
+    Runner --> PipelineMigrator
     Runner --> PostCheck
     Runner --> Inventory
     Runner --> Report
@@ -116,6 +118,7 @@ flowchart LR
 | **2. Prepare** | Core Invariant | `prepare_candidates()` | Wave-level barrier. Filters units into `Candidates`. If any unit in an `atomic_group` fails a Pre-check, **all** other members of that `atomic_group` are held back with `UnitStatus.BLOCKED_BY_GROUP`. |
 | **3. GitHub Setup** | Extensible (`GitHubSetup`) | `GitHubApiSetup`, `VerifyRepoExistsGitHubSetup` | Calls `setup_wave(candidates, context)`. By default, dispatches `setup_unit()` in parallel; subclasses can override `setup_wave()` for bulk IaC/Terraform runs. |
 | **4. Migration** | Extensible (`Migrator`) | `GitSyncMigrator` | Captures `OriginSnapshot` via `git ls-remote --heads`, then executes `gh-repo-sync` (`SyncManager.execute()`) in an isolated temp directory with token masking. |
+| **4.5. Pipeline Migration (Optional)** | Extensible (`list[PipelineMigrator]`) | — *(consumer-defined)* | Executes optional mutating post-mirroring hooks (e.g., CI/CD pipeline conversion or Jenkins job reconfiguration) sequentially per unit and in parallel across units before Stage 5. |
 | **5. Post-checks** | Extensible (`list[PostCheck]`) | `SourceDriftPostCheck`, `JenkinsTriggerPostCheck`, `GitHubActionsTriggerPostCheck` | Receives both `MigrationUnit` and `MigrationStageResult` (including `origin_snapshot`). Verifies no Source Drift occurred and optionally triggers/polls downstream CI. |
 | **6. Inventory Update** | Core Invariant | `update_inventory()` | Calls `gh_migration_inventory_manager.Inventory.update_progress()` for each verified unit to record `INVENTORY_TARGET_STATUS` in Google Sheets. |
 | **7. Migration Report** | Core Invariant | `build_wave_report()`, `ReportFormatter` | Aggregates every `UnitExecutionRecord` in manifest order into a `WaveReport` and renders `console`, `markdown`, or `json` output. |

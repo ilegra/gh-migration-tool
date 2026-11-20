@@ -269,3 +269,144 @@ units:
     )
     assert "name: CI" in committed.stdout
     inv_client.update_progress.assert_called_once()
+
+
+def test_given_bitbucket_origin_deactivator_when_running_wave_then_freezes_succeeded_and_skips_inventory_on_failure(
+    tmp_path: Path,
+) -> None:
+    import responses as responses_lib
+
+    from gh_migration_tool.stages.origin_deactivation import (
+        BitbucketCloudOriginDeactivator,
+    )
+
+    manifest = tmp_path / "wave_deact.yaml"
+    manifest.write_text(
+        """
+units:
+  - name: repo-freeze-ok
+    origin_url: https://bitbucket.org/acme-ws/repo-freeze-ok.git
+    destination_url: https://github.com/acme/repo-freeze-ok.git
+  - name: repo-opt-out
+    origin_url: https://bitbucket.org/acme-ws/repo-opt-out.git
+    destination_url: https://github.com/acme/repo-opt-out.git
+    deactivate_origin: false
+  - name: repo-freeze-fail
+    origin_url: https://bitbucket.org/acme-ws/repo-freeze-fail.git
+    destination_url: https://github.com/acme/repo-freeze-fail.git
+""",
+        encoding="utf-8",
+    )
+
+    class _PassSetup(GitHubSetup):
+        def setup_unit(self, unit: MigrationUnit, context: WaveContext) -> SetupResult:
+            return SetupResult(unit.name, True)
+
+    class _PassMigrator(Migrator):
+        def migrate(
+            self, unit: MigrationUnit, context: WaveContext
+        ) -> MigrationStageResult:
+            return MigrationStageResult(
+                unit_name=unit.name,
+                passed=True,
+                origin_snapshot=OriginSnapshot(
+                    datetime.now(timezone.utc), {"main": "sha1"}
+                ),
+            )
+
+    units = FileWaveLoader().load(manifest)
+    inv_client = MagicMock()
+    settings = MigrationSettings(origin_token="bb-admin-token", http_max_retries=0)
+
+    with responses_lib.RequestsMock() as rsps:
+        rsps.add(
+            responses_lib.GET,
+            "https://api.bitbucket.org/2.0/repositories/acme-ws/repo-freeze-ok/branch-restrictions",
+            json={"values": []},
+            status=200,
+        )
+        rsps.add(
+            responses_lib.POST,
+            "https://api.bitbucket.org/2.0/repositories/acme-ws/repo-freeze-ok/branch-restrictions",
+            json={"id": 1, "kind": "push", "pattern": "*"},
+            status=201,
+        )
+        rsps.add(
+            responses_lib.GET,
+            "https://api.bitbucket.org/2.0/repositories/acme-ws/repo-freeze-fail/branch-restrictions",
+            json={"error": {"message": "Forbidden"}},
+            status=403,
+        )
+
+        runner = WaveRunner(
+            settings=settings,
+            pre_checks=[],
+            github_setup=_PassSetup(),
+            migrator=_PassMigrator(),
+            post_checks=[],
+            inventory_client=inv_client,
+            origin_deactivator=BitbucketCloudOriginDeactivator(),
+        )
+        report = runner.run(units)
+
+    by_name = {r.unit.name: r for r in report.records}
+    assert by_name["repo-freeze-ok"].status == UnitStatus.SUCCEEDED
+    assert by_name["repo-freeze-ok"].origin_deactivation_result is not None
+    assert by_name["repo-freeze-ok"].origin_deactivation_result.passed is True
+    assert by_name["repo-opt-out"].status == UnitStatus.SUCCEEDED
+    assert by_name["repo-opt-out"].origin_deactivation_result is None
+    assert by_name["repo-freeze-fail"].status == UnitStatus.ORIGIN_DEACTIVATION_FAILED
+    assert by_name["repo-freeze-fail"].inventory_result is None
+
+    updated_repos = {
+        call.kwargs["repository_name"]
+        for call in inv_client.update_progress.call_args_list
+    }
+    assert updated_repos == {"repo-freeze-ok", "repo-opt-out"}
+
+
+def test_given_no_origin_deactivator_when_running_wave_then_completes_without_deactivation(
+    tmp_path: Path,
+) -> None:
+    manifest = tmp_path / "wave_no_deact.yaml"
+    manifest.write_text(
+        """
+units:
+  - name: repo-a
+    origin_url: https://bitbucket.org/acme-ws/repo-a.git
+    destination_url: https://github.com/acme/repo-a.git
+""",
+        encoding="utf-8",
+    )
+
+    class _PassSetup(GitHubSetup):
+        def setup_unit(self, unit: MigrationUnit, context: WaveContext) -> SetupResult:
+            return SetupResult(unit.name, True)
+
+    class _PassMigrator(Migrator):
+        def migrate(
+            self, unit: MigrationUnit, context: WaveContext
+        ) -> MigrationStageResult:
+            return MigrationStageResult(
+                unit_name=unit.name,
+                passed=True,
+                origin_snapshot=OriginSnapshot(
+                    datetime.now(timezone.utc), {"main": "sha1"}
+                ),
+            )
+
+    units = FileWaveLoader().load(manifest)
+    inv_client = MagicMock()
+    runner = WaveRunner(
+        settings=MigrationSettings(),
+        pre_checks=[],
+        github_setup=_PassSetup(),
+        migrator=_PassMigrator(),
+        post_checks=[],
+        inventory_client=inv_client,
+    )
+    report = runner.run(units)
+
+    assert report.status_counts[UnitStatus.SUCCEEDED] == 1
+    assert report.records[0].origin_deactivation_result is None
+    inv_client.update_progress.assert_called_once()

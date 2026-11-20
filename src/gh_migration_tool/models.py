@@ -20,6 +20,7 @@ class UnitStatus(str, Enum):
     MIGRATION_FAILED = "MIGRATION_FAILED"
     PIPELINE_MIGRATION_FAILED = "PIPELINE_MIGRATION_FAILED"
     POST_CHECK_FAILED = "POST_CHECK_FAILED"
+    ORIGIN_DEACTIVATION_FAILED = "ORIGIN_DEACTIVATION_FAILED"
     INVENTORY_UPDATE_FAILED = "INVENTORY_UPDATE_FAILED"
 
 
@@ -41,6 +42,7 @@ class MigrationUnit:
     rulesets: list[dict[str, Any]] = field(default_factory=list)
     jenkins_job: str | None = None
     github_workflow: str | None = None
+    deactivate_origin: bool = True
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
@@ -98,6 +100,18 @@ class PipelineMigrationResult:
 
 
 @dataclass
+class OriginDeactivationResult:
+    """Outcome of the Origin Deactivation stage for a single Migration Unit."""
+
+    unit_name: str
+    passed: bool
+    deactivator_name: str = ""
+    already_disabled: bool = False
+    message: str = ""
+    details: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
 class InventoryUpdateResult:
     """Outcome of the Inventory Update stage for a single verified Migration Unit."""
 
@@ -118,6 +132,7 @@ class UnitExecutionRecord:
     migration_result: MigrationStageResult | None = None
     pipeline_migrations: list[PipelineMigrationResult] = field(default_factory=list)
     post_checks: list[CheckResult] = field(default_factory=list)
+    origin_deactivation_result: OriginDeactivationResult | None = None
     inventory_result: InventoryUpdateResult | None = None
     error_summary: str = ""
 

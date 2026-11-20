@@ -151,3 +151,45 @@ units:
 
     with pytest.raises(ValueError, match="invalid visibility"):
         FileWaveLoader().load(manifest)
+
+
+def test_given_deactivate_origin_in_manifest_when_loading_then_parses_boolean_and_defaults_true(
+    tmp_path: Path,
+) -> None:
+    manifest = tmp_path / "deact.yaml"
+    manifest.write_text(
+        """
+units:
+  - name: repo-default
+    origin_url: https://bitbucket.org/ws/repo-default
+    destination_url: https://github.com/org/repo-default.git
+  - name: repo-opt-out
+    origin_url: https://bitbucket.org/ws/repo-opt-out
+    destination_url: https://github.com/org/repo-opt-out.git
+    deactivate_origin: false
+""",
+        encoding="utf-8",
+    )
+
+    units = FileWaveLoader().load(manifest)
+    assert units[0].deactivate_origin is True
+    assert units[1].deactivate_origin is False
+
+
+def test_given_non_boolean_deactivate_origin_when_loading_then_raises_value_error(
+    tmp_path: Path,
+) -> None:
+    manifest = tmp_path / "bad_deact.yaml"
+    manifest.write_text(
+        """
+units:
+  - name: repo-bad
+    origin_url: https://bitbucket.org/ws/repo-bad
+    destination_url: https://github.com/org/repo-bad.git
+    deactivate_origin: "false"
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="invalid deactivate_origin"):
+        FileWaveLoader().load(manifest)

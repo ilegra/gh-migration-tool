@@ -8,10 +8,12 @@ import os
 import sys
 from pathlib import Path
 
+from gh_migration_tool.interfaces import OriginDeactivator
 from gh_migration_tool.loader import FileWaveLoader
 from gh_migration_tool.models import UnitStatus
 from gh_migration_tool.runner import WaveRunner
 from gh_migration_tool.settings import MigrationSettings
+from gh_migration_tool.stages.origin_deactivation import BitbucketCloudOriginDeactivator
 from gh_migration_tool.stages.report import ReportFormatter
 
 
@@ -46,6 +48,14 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="Optional path to write the rendered report",
     )
+    run_parser.add_argument(
+        "--origin-deactivator",
+        choices=["none", "bitbucket-cloud"],
+        default="none",
+        help=(
+            "Optional origin repository deactivator for verified units (default: none)"
+        ),
+    )
 
     args = parser.parse_args(argv)
     _configure_logging()
@@ -54,7 +64,12 @@ def main(argv: list[str] | None = None) -> int:
         loader = FileWaveLoader()
         units = loader.load(args.manifest)
         settings = MigrationSettings()
-        runner = WaveRunner(settings=settings)
+        origin_deactivator: OriginDeactivator | None = None
+        if args.origin_deactivator == "bitbucket-cloud":
+            origin_deactivator = BitbucketCloudOriginDeactivator()
+        runner = WaveRunner(
+            settings=settings, origin_deactivator=origin_deactivator
+        )
         report = runner.run(units)
 
         if args.format == "markdown":

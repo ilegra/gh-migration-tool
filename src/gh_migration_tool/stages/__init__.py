@@ -6,6 +6,7 @@ from gh_migration_tool.stages.github_setup import (
 )
 from gh_migration_tool.stages.inventory import update_inventory
 from gh_migration_tool.stages.migration import GitSyncMigrator
+from gh_migration_tool.stages.origin_deactivation import BitbucketCloudOriginDeactivator
 from gh_migration_tool.stages.post_checks import (
     GitHubActionsTriggerPostCheck,
     JenkinsTriggerPostCheck,
@@ -16,6 +17,7 @@ from gh_migration_tool.stages.prepare import prepare_candidates
 from gh_migration_tool.stages.report import ReportFormatter, build_wave_report
 
 __all__ = [
+    "BitbucketCloudOriginDeactivator",
     "GitHubActionsTriggerPostCheck",
     "GitHubApiSetup",
     "GitSyncMigrator",

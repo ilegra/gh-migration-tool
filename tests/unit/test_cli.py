@@ -76,3 +76,23 @@ def test_given_failed_unit_in_wave_when_running_cli_then_returns_1(
         exit_code = main(["run", str(manifest), "--format", "markdown"])
 
     assert exit_code == 1
+
+
+def test_given_origin_deactivator_flag_when_running_cli_then_wires_bitbucket_deactivator(
+    tmp_path: Path,
+) -> None:
+    manifest = _write_manifest(tmp_path)
+    mock_runner = MagicMock()
+    mock_runner.run.return_value = _report(UnitStatus.SUCCEEDED)
+
+    with patch(
+        "gh_migration_tool.cli.WaveRunner", return_value=mock_runner
+    ) as runner_cls:
+        exit_code = main(
+            ["run", str(manifest), "--origin-deactivator", "bitbucket-cloud"]
+        )
+
+    assert exit_code == 0
+    deactivator = runner_cls.call_args.kwargs["origin_deactivator"]
+    assert deactivator is not None
+    assert deactivator.name == "bitbucket_cloud_origin_deactivator"

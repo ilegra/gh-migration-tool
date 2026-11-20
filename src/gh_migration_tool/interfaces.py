@@ -11,6 +11,7 @@ from gh_migration_tool.models import (
     CheckResult,
     MigrationStageResult,
     MigrationUnit,
+    OriginDeactivationResult,
     PipelineMigrationResult,
     SetupResult,
 )
@@ -140,3 +141,18 @@ class PostCheck(ABC):
         context: WaveContext,
     ) -> CheckResult:
         """Execute the Post-check for a single migrated Migration Unit."""
+
+
+class OriginDeactivator(ABC):
+    """Extensible interface for optional Step 5.5 (Origin Deactivation)."""
+
+    @property
+    @abstractmethod
+    def name(self) -> str:
+        """Human-readable identifier for this OriginDeactivator."""
+
+    @abstractmethod
+    def deactivate(
+        self, unit: MigrationUnit, context: WaveContext
+    ) -> OriginDeactivationResult:
+        """Deactivate or freeze the Origin repository for a verified unit."""

@@ -276,7 +276,7 @@ def test_given_bitbucket_origin_deactivator_when_running_wave_then_freezes_succe
 ) -> None:
     import responses as responses_lib
 
-    from gh_migration_tool.stages.origin_deactivation import (
+    from gh_migration_tool.origins.bitbucket_cloud.deactivation import (
         BitbucketCloudOriginDeactivator,
     )
 

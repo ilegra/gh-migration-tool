@@ -10,6 +10,7 @@ from unittest.mock import MagicMock
 from gh_migration_tool.interfaces import (
     GitHubSetup,
     Migrator,
+    OriginDeactivator,
     PipelineMigrator,
     PostCheck,
     PreCheck,
@@ -19,6 +20,7 @@ from gh_migration_tool.models import (
     CheckResult,
     MigrationStageResult,
     MigrationUnit,
+    OriginDeactivationResult,
     OriginSnapshot,
     PipelineMigrationResult,
     SetupResult,
@@ -425,3 +427,78 @@ def test_given_multiple_units_with_pipeline_migrators_when_running_wave_then_exe
 
     assert report.status_counts[UnitStatus.SUCCEEDED] == 2
     assert len(threads) == 2
+
+
+def test_given_origin_deactivator_when_running_wave_then_runs_before_inventory_and_isolates_failures() -> (
+    None
+):
+    deactivated_units: list[str] = []
+
+    class _StubDeactivator(OriginDeactivator):
+        @property
+        def name(self) -> str:
+            return "stub_deactivator"
+
+        def deactivate(
+            self, unit: MigrationUnit, context: WaveContext
+        ) -> OriginDeactivationResult:
+            deactivated_units.append(unit.name)
+            if unit.name == "deact-fail":
+                return OriginDeactivationResult(
+                    unit_name=unit.name,
+                    passed=False,
+                    deactivator_name=self.name,
+                    message="deactivation error",
+                )
+            if unit.name == "deact-boom":
+                raise RuntimeError("unexpected crash")
+            return OriginDeactivationResult(
+                unit_name=unit.name,
+                passed=True,
+                deactivator_name=self.name,
+                message="frozen",
+            )
+
+    inv_client = MagicMock()
+    units = [
+        _unit("ok-repo"),
+        MigrationUnit(
+            name="opt-out-repo",
+            origin_url="https://dev.azure.com/org/p/_git/opt-out-repo",
+            destination_url="https://github.com/org/opt-out-repo.git",
+            deactivate_origin=False,
+        ),
+        _unit("deact-fail"),
+        _unit("deact-boom"),
+        _unit("post-fail"),
+    ]
+    runner = WaveRunner(
+        settings=MigrationSettings(),
+        pre_checks=[],
+        github_setup=_StubSetup(set()),
+        migrator=_StubMigrator(set()),
+        post_checks=[_StubPostCheck({"post-fail"})],
+        inventory_client=inv_client,
+        origin_deactivator=_StubDeactivator(),
+    )
+
+    report = runner.run(units)
+    by_name = {r.unit.name: r for r in report.records}
+
+    assert set(deactivated_units) == {"ok-repo", "deact-fail", "deact-boom"}
+    assert by_name["ok-repo"].status == UnitStatus.SUCCEEDED
+    assert by_name["ok-repo"].origin_deactivation_result is not None
+    assert by_name["ok-repo"].origin_deactivation_result.passed is True
+    assert by_name["opt-out-repo"].status == UnitStatus.SUCCEEDED
+    assert by_name["opt-out-repo"].origin_deactivation_result is None
+    assert by_name["deact-fail"].status == UnitStatus.ORIGIN_DEACTIVATION_FAILED
+    assert by_name["deact-fail"].inventory_result is None
+    assert by_name["deact-boom"].status == UnitStatus.ORIGIN_DEACTIVATION_FAILED
+    assert by_name["deact-boom"].inventory_result is None
+    assert by_name["post-fail"].status == UnitStatus.POST_CHECK_FAILED
+
+    updated_repos = {
+        call.kwargs["repository_name"]
+        for call in inv_client.update_progress.call_args_list
+    }
+    assert updated_repos == {"ok-repo", "opt-out-repo"}

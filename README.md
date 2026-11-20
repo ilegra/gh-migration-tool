@@ -425,7 +425,12 @@ gh-migration-tool run wave-manifest.yaml --format markdown --report-out migratio
 
 # Run wave and save JSON report to file
 gh-migration-tool run wave-manifest.yaml --format json --report-out migration-report.json
+
+# Run wave and freeze Bitbucket Cloud origin repositories after Post-checks
+gh-migration-tool run wave-manifest.yaml --origin-deactivator bitbucket-cloud
 ```
+
+> **Note on Origin Deactivation (Step 5.5):** When enabled via `--origin-deactivator bitbucket-cloud` (or `WaveRunner(..., origin_deactivator=BitbucketCloudOriginDeactivator())`), Step 5.5 runs **after `PostCheck`** and **before `Inventory Update`**. By default, `BitbucketCloudOriginDeactivator` adds a `"push"` branch restriction (`pattern: "*"`) so original permissions are preserved for analysis and rollback is straightforward (`ORIGIN_TOKEN` requires `repository:admin` scope). Individual units can opt out in the Wave Manifest with `deactivate_origin: false`. If deactivation fails, the unit is marked `ORIGIN_DEACTIVATION_FAILED` and `Inventory Update` is skipped.
 
 **Exit codes:**
 - `0`: All Migration Units reached `UnitStatus.SUCCEEDED`.

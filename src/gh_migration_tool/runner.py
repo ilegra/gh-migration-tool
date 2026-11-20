@@ -12,6 +12,7 @@ from gh_migration_tool.auth.github_app import GitHubAppTokenProvider
 from gh_migration_tool.interfaces import (
     GitHubSetup,
     Migrator,
+    OriginDeactivator,
     PipelineMigrator,
     PostCheck,
     PreCheck,
@@ -22,6 +23,7 @@ from gh_migration_tool.models import (
     CheckResult,
     MigrationStageResult,
     MigrationUnit,
+    OriginDeactivationResult,
     PipelineMigrationResult,
     UnitExecutionRecord,
     UnitStatus,
@@ -52,6 +54,7 @@ class WaveRunner:
         token_provider: GitHubAppTokenProvider | None = None,
         inventory_client: Any = None,
         pipeline_migrators: Sequence[PipelineMigrator] | None = None,
+        origin_deactivator: OriginDeactivator | None = None,
     ) -> None:
         self.settings = settings
         self.pre_checks: list[PreCheck] = (
@@ -65,6 +68,7 @@ class WaveRunner:
         self.pipeline_migrators: list[PipelineMigrator] = (
             list(pipeline_migrators) if pipeline_migrators is not None else []
         )
+        self.origin_deactivator: OriginDeactivator | None = origin_deactivator
         self._token_provider = token_provider or self._build_token_provider(settings)
         self._inventory_client = inventory_client
 
@@ -175,11 +179,37 @@ class WaveRunner:
                         "; ".join(failed_msgs) or "Post-check failed."
                     )
 
+            # Step 5.5: Optional Origin Deactivation (parallel per unit)
+            inventory_units = verified_units
+            if self.origin_deactivator is not None and verified_units:
+                to_deactivate = [u for u in verified_units if u.deactivate_origin]
+                deact_results = self._run_origin_deactivation(
+                    to_deactivate, context, max_workers, executor
+                )
+                inventory_units = []
+                for unit in verified_units:
+                    if not unit.deactivate_origin:
+                        inventory_units.append(unit)
+                        continue
+                    d_res = deact_results.get(unit.name)
+                    records[unit.name].origin_deactivation_result = d_res
+                    if d_res is not None and d_res.passed:
+                        inventory_units.append(unit)
+                    else:
+                        records[
+                            unit.name
+                        ].status = UnitStatus.ORIGIN_DEACTIVATION_FAILED
+                        records[unit.name].error_summary = (
+                            d_res.message
+                            if d_res and d_res.message
+                            else "Origin deactivation failed."
+                        )
+
         # Step 6: Inventory Update (core stage)
         inv_results = update_inventory(
-            verified_units, self.settings, inventory_client=self._inventory_client
+            inventory_units, self.settings, inventory_client=self._inventory_client
         )
-        for unit in verified_units:
+        for unit in inventory_units:
             i_res = inv_results.get(unit.name)
             records[unit.name].inventory_result = i_res
             if i_res is None or not i_res.passed:
@@ -311,4 +341,36 @@ class WaveRunner:
             self.post_checks,
             lambda check, unit: check.execute(unit, mig_results[unit.name], context),
             executor,
+        )
+
+    def _run_origin_deactivation(
+        self,
+        units: list[MigrationUnit],
+        context: WaveContext,
+        max_workers: int,
+        executor: ThreadPoolExecutor,
+    ) -> dict[str, OriginDeactivationResult]:
+        deactivator = self.origin_deactivator
+        if deactivator is None or not units:
+            return {}
+
+        def _deactivate_unit(unit: MigrationUnit) -> OriginDeactivationResult:
+            try:
+                return deactivator.deactivate(unit, context)
+            except Exception as exc:
+                logger.error(
+                    "OriginDeactivator '%s' failed for unit '%s': %s",
+                    deactivator.name,
+                    unit.name,
+                    exc,
+                )
+                return OriginDeactivationResult(
+                    unit_name=unit.name,
+                    passed=False,
+                    deactivator_name=deactivator.name,
+                    message=str(exc),
+                )
+
+        return run_parallel_by_unit(
+            units, _deactivate_unit, max_workers, executor=executor
         )

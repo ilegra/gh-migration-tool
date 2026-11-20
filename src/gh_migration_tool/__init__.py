@@ -4,6 +4,7 @@ from gh_migration_tool.auth.github_app import GitHubAppTokenProvider
 from gh_migration_tool.interfaces import (
     GitHubSetup,
     Migrator,
+    OriginDeactivator,
     PipelineMigrator,
     PostCheck,
     PreCheck,
@@ -15,6 +16,7 @@ from gh_migration_tool.models import (
     InventoryUpdateResult,
     MigrationStageResult,
     MigrationUnit,
+    OriginDeactivationResult,
     OriginSnapshot,
     PipelineMigrationResult,
     SetupResult,
@@ -25,6 +27,7 @@ from gh_migration_tool.models import (
 from gh_migration_tool.runner import WaveRunner
 from gh_migration_tool.settings import MigrationSettings
 from gh_migration_tool.stages import (
+    BitbucketCloudOriginDeactivator,
     GitHubActionsTriggerPostCheck,
     GitHubApiSetup,
     GitSyncMigrator,
@@ -38,6 +41,7 @@ from gh_migration_tool.stages import (
 __version__ = "0.1.0"
 
 __all__ = [
+    "BitbucketCloudOriginDeactivator",
     "CheckResult",
     "FileWaveLoader",
     "GitHubActionsTriggerPostCheck",
@@ -52,6 +56,8 @@ __all__ = [
     "MigrationStageResult",
     "MigrationUnit",
     "Migrator",
+    "OriginDeactivationResult",
+    "OriginDeactivator",
     "OriginSnapshot",
     "PipelineMigrationResult",
     "PipelineMigrator",

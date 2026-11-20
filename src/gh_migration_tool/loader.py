@@ -110,6 +110,17 @@ class FileWaveLoader(WaveLoader):
                 f"Expected one of {_VALID_VISIBILITIES}."
             )
 
+        raw_deactivate = raw.get("deactivate_origin", True)
+        if raw_deactivate is None:
+            deactivate_origin = True
+        elif isinstance(raw_deactivate, bool):
+            deactivate_origin = raw_deactivate
+        else:
+            raise ValueError(
+                f"Unit '{name}' has invalid deactivate_origin '{raw_deactivate}'. "
+                "Expected a boolean."
+            )
+
         return MigrationUnit(
             name=name,
             origin_url=origin_url,
@@ -127,5 +138,6 @@ class FileWaveLoader(WaveLoader):
             rulesets=list(raw.get("rulesets") or []),
             jenkins_job=raw.get("jenkins_job"),
             github_workflow=raw.get("github_workflow"),
+            deactivate_origin=deactivate_origin,
             metadata=dict(raw.get("metadata") or {}),
         )

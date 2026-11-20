@@ -196,9 +196,9 @@ class WaveRunner:
                     if d_res is not None and d_res.passed:
                         inventory_units.append(unit)
                     else:
-                        records[unit.name].status = (
-                            UnitStatus.ORIGIN_DEACTIVATION_FAILED
-                        )
+                        records[
+                            unit.name
+                        ].status = UnitStatus.ORIGIN_DEACTIVATION_FAILED
                         records[unit.name].error_summary = (
                             d_res.message
                             if d_res and d_res.message

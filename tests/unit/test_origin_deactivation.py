@@ -60,7 +60,9 @@ def test_given_valid_bitbucket_repo_when_deactivating_then_creates_push_branch_r
     assert result.details["workspace"] == "acme-ws"
     assert result.details["repo_slug"] == "payments-api"
     assert result.details["push_restriction_added"] is True
-    assert responses.calls[0].request.headers["Authorization"] == "Bearer bb-admin-token"
+    assert (
+        responses.calls[0].request.headers["Authorization"] == "Bearer bb-admin-token"
+    )
 
 
 @responses.activate

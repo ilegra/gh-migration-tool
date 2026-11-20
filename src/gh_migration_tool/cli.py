@@ -67,9 +67,7 @@ def main(argv: list[str] | None = None) -> int:
         origin_deactivator: OriginDeactivator | None = None
         if args.origin_deactivator == "bitbucket-cloud":
             origin_deactivator = BitbucketCloudOriginDeactivator()
-        runner = WaveRunner(
-            settings=settings, origin_deactivator=origin_deactivator
-        )
+        runner = WaveRunner(settings=settings, origin_deactivator=origin_deactivator)
         report = runner.run(units)
 
         if args.format == "markdown":

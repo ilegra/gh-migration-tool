@@ -7,24 +7,22 @@ import time
 from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
-from gh_migration_tool.interfaces import (
+from gh_migration_tool.contracts import (
+    CheckResult,
     GitHubSetup,
+    MigrationStageResult,
+    MigrationUnit,
     Migrator,
+    OriginDeactivationResult,
     OriginDeactivator,
+    OriginSnapshot,
+    PipelineMigrationResult,
     PipelineMigrator,
     PostCheck,
     PreCheck,
-    WaveContext,
-)
-from gh_migration_tool.models import (
-    CheckResult,
-    MigrationStageResult,
-    MigrationUnit,
-    OriginDeactivationResult,
-    OriginSnapshot,
-    PipelineMigrationResult,
     SetupResult,
     UnitStatus,
+    WaveContext,
 )
 from gh_migration_tool.runner import WaveRunner
 from gh_migration_tool.settings import MigrationSettings

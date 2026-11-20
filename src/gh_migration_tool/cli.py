@@ -8,13 +8,12 @@ import os
 import sys
 from pathlib import Path
 
-from gh_migration_tool.interfaces import OriginDeactivator
-from gh_migration_tool.loader import FileWaveLoader
-from gh_migration_tool.models import UnitStatus
+from gh_migration_tool.contracts import OriginDeactivator, UnitStatus
+from gh_migration_tool.engine.loader import FileWaveLoader
+from gh_migration_tool.engine.report import ReportFormatter
+from gh_migration_tool.origins.bitbucket_cloud import BitbucketCloudOriginDeactivator
 from gh_migration_tool.runner import WaveRunner
 from gh_migration_tool.settings import MigrationSettings
-from gh_migration_tool.stages.origin_deactivation import BitbucketCloudOriginDeactivator
-from gh_migration_tool.stages.report import ReportFormatter
 
 
 def _configure_logging() -> None:

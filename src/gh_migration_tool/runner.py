@@ -8,35 +8,34 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from typing import Any
 
-from gh_migration_tool.auth.github_app import GitHubAppTokenProvider
-from gh_migration_tool.interfaces import (
+from gh_migration_tool.contracts import (
+    CheckResult,
     GitHubSetup,
+    MigrationStageResult,
+    MigrationUnit,
     Migrator,
+    OriginDeactivationResult,
     OriginDeactivator,
+    PipelineMigrationResult,
     PipelineMigrator,
     PostCheck,
     PreCheck,
-    WaveContext,
-    run_parallel_by_unit,
-)
-from gh_migration_tool.models import (
-    CheckResult,
-    MigrationStageResult,
-    MigrationUnit,
-    OriginDeactivationResult,
-    PipelineMigrationResult,
     UnitExecutionRecord,
     UnitStatus,
+    WaveContext,
     WaveReport,
 )
+from gh_migration_tool.destinations.github import (
+    GitHubApiSetup,
+    GitHubAppTokenProvider,
+)
+from gh_migration_tool.engine._concurrency import run_parallel_by_unit
+from gh_migration_tool.engine.git_sync import GitSyncMigrator, SourceDriftPostCheck
+from gh_migration_tool.engine.inventory import update_inventory
+from gh_migration_tool.engine.prepare import prepare_candidates
+from gh_migration_tool.engine.report import build_wave_report
+from gh_migration_tool.origins.jenkins import JenkinsJobPreCheck
 from gh_migration_tool.settings import MigrationSettings
-from gh_migration_tool.stages.github_setup import GitHubApiSetup
-from gh_migration_tool.stages.inventory import update_inventory
-from gh_migration_tool.stages.migration import GitSyncMigrator
-from gh_migration_tool.stages.post_checks import SourceDriftPostCheck
-from gh_migration_tool.stages.pre_checks import JenkinsJobPreCheck
-from gh_migration_tool.stages.prepare import prepare_candidates
-from gh_migration_tool.stages.report import build_wave_report
 
 logger = logging.getLogger(__name__)
 

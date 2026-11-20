@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from gh_migration_tool.cli import main
-from gh_migration_tool.models import (
+from gh_migration_tool.contracts import (
     MigrationUnit,
     UnitExecutionRecord,
     UnitStatus,

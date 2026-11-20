@@ -86,7 +86,7 @@ flowchart LR
     Settings -->|"WaveContext"| Runner
     TokenProvider["GitHubAppTokenProvider (JWT -> Installation Token)"] -->|"WaveContext"| Runner
 
-    subgraph Extensible["Extensible Interfaces (gh_migration_tool.interfaces)"]
+    subgraph Extensible["Extensible Interfaces (gh_migration_tool.contracts)"]
         PreCheck["PreCheck (ABC)"]
         GitHubSetup["GitHubSetup (ABC)"]
         Migrator["Migrator (ABC)"]
@@ -130,19 +130,19 @@ Not all migrations are the same:
 - **Provisioning varies**: Some organizations create repositories, teams, and rulesets dynamically via the GitHub API (`GitHubApiSetup`), while others manage repositories through Terraform/IaC (`VerifyRepoExistsGitHubSetup` or a custom bulk `setup_wave` runner).
 - **Sync & verification vary**: Different SCMs, monorepo splitting rules, or downstream deployment webhooks require custom `Migrator` or `PostCheck` logic.
 
-By implementing the typed interfaces in `gh_migration_tool.interfaces`, you reuse the core wave orchestration, `Atomic Group` gating, thread-pool concurrency, `GitHubAppTokenProvider`, Google Sheets inventory writeback, and reporting without reimplementing pipeline plumbing.
+By implementing the typed interfaces in `gh_migration_tool.contracts`, you reuse the core wave orchestration, `Atomic Group` gating, thread-pool concurrency, `GitHubAppTokenProvider`, Google Sheets inventory writeback, and reporting without reimplementing pipeline plumbing.
 
 ### Extension Mechanisms & Concrete Examples
 
 > [!IMPORTANT]
 > **CLI vs. Python SDK**: The built-in `gh-migration-tool run` CLI uses the default stages (`JenkinsJobPreCheck`, `GitHubApiSetup`, `GitSyncMigrator`, `SourceDriftPostCheck`). To plug in custom `PreCheck`, `GitHubSetup`, `Migrator`, or `PostCheck` implementations, create a Python entrypoint script (example below) that passes your custom instances to `WaveRunner`.
 
-All extension contracts live in `gh_migration_tool.interfaces`:
+All extension contracts live in `gh_migration_tool.contracts`:
 - `PreCheck`: implement `name` (`@property`) and `execute(self, unit: MigrationUnit, context: WaveContext) -> CheckResult`
 - `GitHubSetup`: implement `setup_unit(self, unit: MigrationUnit, context: WaveContext) -> SetupResult` (or override `setup_wave(self, candidates: list[MigrationUnit], context: WaveContext) -> dict[str, SetupResult]` for batch provisioning)
 - `Migrator`: implement `migrate(self, unit: MigrationUnit, context: WaveContext) -> MigrationStageResult`
 - `PostCheck`: implement `name` (`@property`) and `execute(self, unit: MigrationUnit, migration_result: MigrationStageResult, context: WaveContext) -> CheckResult`
-- `WaveLoader` (in `gh_migration_tool.loader`): implement `load(self, source: Path) -> list[MigrationUnit]` if loading manifests from a custom format or API.
+- `WaveLoader` (in `gh_migration_tool.contracts`): implement `load(self, source: Path) -> list[MigrationUnit]` if loading manifests from a custom format or API.
 
 #### Example: Custom `PreCheck`, Bulk `GitHubSetup`, `PostCheck`, and Wiring into `WaveRunner`
 

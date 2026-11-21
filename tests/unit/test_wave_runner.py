@@ -5,7 +5,10 @@ from __future__ import annotations
 import threading
 import time
 from datetime import datetime, timezone
+from typing import Any, cast
 from unittest.mock import MagicMock
+
+import pytest
 
 from gh_migration_tool.contracts import (
     CheckResult,
@@ -500,3 +503,13 @@ def test_given_origin_deactivator_when_running_wave_then_runs_before_inventory_a
         for call in inv_client.update_progress.call_args_list
     }
     assert updated_repos == {"ok-repo", "opt-out-repo"}
+
+
+def test_given_none_inventory_client_when_initializing_wave_runner_then_raises_value_error() -> (
+    None
+):
+    with pytest.raises(ValueError, match="inventory_client"):
+        WaveRunner(
+            settings=MigrationSettings(),
+            inventory_client=cast(Any, None),
+        )

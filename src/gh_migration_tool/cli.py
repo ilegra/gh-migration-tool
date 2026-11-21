@@ -7,13 +7,18 @@ import logging
 import os
 import sys
 from pathlib import Path
+from typing import cast
 
-from gh_migration_tool.contracts import OriginDeactivator, UnitStatus
+from gh_migration_inventory_manager import Inventory
+
+from gh_migration_tool.contracts import InventoryClient, OriginDeactivator, UnitStatus
 from gh_migration_tool.engine.loader import FileWaveLoader
 from gh_migration_tool.engine.report import ReportFormatter
 from gh_migration_tool.origins.bitbucket_cloud import BitbucketCloudOriginDeactivator
 from gh_migration_tool.runner import WaveRunner
 from gh_migration_tool.settings import MigrationSettings
+
+logger = logging.getLogger(__name__)
 
 
 def _configure_logging() -> None:
@@ -22,6 +27,18 @@ def _configure_logging() -> None:
     logging.basicConfig(
         level=level,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    )
+
+
+def _build_inventory_client(settings: MigrationSettings) -> InventoryClient:
+    if not settings.google_spreadsheet_id.strip():
+        raise ValueError("GOOGLE_SPREADSHEET_ID is not configured.")
+    return cast(
+        InventoryClient,
+        Inventory(
+            spreadsheet_id=settings.google_spreadsheet_id,
+            credentials_path=settings.google_credentials_path,
+        ),
     )
 
 
@@ -63,10 +80,19 @@ def main(argv: list[str] | None = None) -> int:
         loader = FileWaveLoader()
         units = loader.load(args.manifest)
         settings = MigrationSettings()
+        try:
+            inventory_client = _build_inventory_client(settings)
+        except ValueError as exc:
+            logger.error("Failed to initialize inventory client: %s", exc)
+            return 1
         origin_deactivator: OriginDeactivator | None = None
         if args.origin_deactivator == "bitbucket-cloud":
             origin_deactivator = BitbucketCloudOriginDeactivator()
-        runner = WaveRunner(settings=settings, origin_deactivator=origin_deactivator)
+        runner = WaveRunner(
+            settings=settings,
+            inventory_client=inventory_client,
+            origin_deactivator=origin_deactivator,
+        )
         report = runner.run(units)
 
         if args.format == "markdown":

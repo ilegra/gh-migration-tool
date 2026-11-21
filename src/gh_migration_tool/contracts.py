@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
     from gh_migration_tool.destinations.github.auth import GitHubAppTokenProvider
@@ -276,3 +276,16 @@ class OriginDeactivator(ABC):
         self, unit: MigrationUnit, context: WaveContext
     ) -> OriginDeactivationResult:
         """Deactivate or freeze the Origin repository for a verified unit."""
+
+
+@runtime_checkable
+class InventoryClient(Protocol):
+    """Structural contract for Stage 6 inventory persistence clients."""
+
+    def update_progress(
+        self,
+        repository_name: str,
+        status: str,
+        project: str | None = None,
+    ) -> Any:
+        """Update the migration status for a repository in the inventory."""

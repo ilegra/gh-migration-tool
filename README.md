@@ -80,10 +80,12 @@ flowchart TD
 flowchart LR
     Caller["CLI (gh-migration-tool) or Custom Python SDK Script"] --> Loader["WaveLoader / FileWaveLoader"]
     Caller --> Settings["MigrationSettings (.env / Env Vars)"]
+    Caller --> InventoryClient["InventoryClient (e.g. gh_migration_inventory_manager.Inventory)"]
     Caller --> Runner["WaveRunner"]
 
     Loader -->|"list[MigrationUnit]"| Runner
     Settings -->|"WaveContext"| Runner
+    InventoryClient -->|"DI (inventory_client)"| Runner
     TokenProvider["GitHubAppTokenProvider (JWT -> Installation Token)"] -->|"WaveContext"| Runner
 
     subgraph Extensible["Extensible Interfaces (gh_migration_tool.contracts)"]
@@ -120,7 +122,7 @@ flowchart LR
 | **4. Migration** | Extensible (`Migrator`) | `GitSyncMigrator` | Captures `OriginSnapshot` via `git ls-remote --heads`, then executes `gh-repo-sync` (`SyncManager.execute()`) in an isolated temp directory with token masking. |
 | **4.5. Pipeline Migration (Optional)** | Extensible (`list[PipelineMigrator]`) | — *(consumer-defined)* | Executes optional mutating post-mirroring hooks (e.g., CI/CD pipeline conversion or Jenkins job reconfiguration) sequentially per unit and in parallel across units before Stage 5. |
 | **5. Post-checks** | Extensible (`list[PostCheck]`) | `SourceDriftPostCheck`, `JenkinsTriggerPostCheck`, `GitHubActionsTriggerPostCheck` | Receives both `MigrationUnit` and `MigrationStageResult` (including `origin_snapshot`). Verifies no Source Drift occurred and optionally triggers/polls downstream CI. |
-| **6. Inventory Update** | Core Invariant | `update_inventory()` | Calls `gh_migration_inventory_manager.Inventory.update_progress()` for each verified unit to record `INVENTORY_TARGET_STATUS` in Google Sheets. |
+| **6. Inventory Update** | Core Invariant | `update_inventory()` | Calls `inventory_client.update_progress()` on the injected `InventoryClient` (such as `gh_migration_inventory_manager.Inventory`) for each verified unit to record `INVENTORY_TARGET_STATUS` in Google Sheets. |
 | **7. Migration Report** | Core Invariant | `build_wave_report()`, `ReportFormatter` | Aggregates every `UnitExecutionRecord` in manifest order into a `WaveReport` and renders `console`, `markdown`, or `json` output. |
 
 ### Why Extend `gh-migration-tool`?
@@ -152,6 +154,7 @@ Save the following as `run_custom_wave.py`:
 import sys
 from pathlib import Path
 
+from gh_migration_inventory_manager import Inventory
 from gh_migration_tool import (
     CheckResult,
     FileWaveLoader,
@@ -246,9 +249,14 @@ def main() -> int:
     manifest_path = Path(sys.argv[1])
     units = FileWaveLoader().load(manifest_path)
     settings = MigrationSettings()
+    inventory_client = Inventory(
+        spreadsheet_id=settings.google_spreadsheet_id,
+        credentials_path=settings.google_credentials_path,
+    )
 
     runner = WaveRunner(
         settings=settings,
+        inventory_client=inventory_client,
         pre_checks=[JenkinsJobPreCheck(), FreezeWindowPreCheck()],
         github_setup=BulkTerraformGitHubSetup(),
         post_checks=[

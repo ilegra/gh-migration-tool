@@ -3,6 +3,7 @@
 from gh_migration_tool.contracts import (
     CheckResult,
     GitHubSetup,
+    InventoryClient,
     InventoryUpdateResult,
     MigrationStageResult,
     MigrationUnit,
@@ -52,6 +53,7 @@ __all__ = [
     "GitHubAppTokenProvider",
     "GitHubSetup",
     "GitSyncMigrator",
+    "InventoryClient",
     "InventoryUpdateResult",
     "JenkinsJobPreCheck",
     "JenkinsTriggerPostCheck",

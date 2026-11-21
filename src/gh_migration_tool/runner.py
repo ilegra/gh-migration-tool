@@ -11,6 +11,7 @@ from typing import Any
 from gh_migration_tool.contracts import (
     CheckResult,
     GitHubSetup,
+    InventoryClient,
     MigrationStageResult,
     MigrationUnit,
     Migrator,
@@ -46,15 +47,19 @@ class WaveRunner:
     def __init__(
         self,
         settings: MigrationSettings,
+        inventory_client: InventoryClient,
         pre_checks: list[PreCheck] | None = None,
         github_setup: GitHubSetup | None = None,
         migrator: Migrator | None = None,
         post_checks: list[PostCheck] | None = None,
         token_provider: GitHubAppTokenProvider | None = None,
-        inventory_client: Any = None,
         pipeline_migrators: Sequence[PipelineMigrator] | None = None,
         origin_deactivator: OriginDeactivator | None = None,
     ) -> None:
+        if inventory_client is None:
+            raise ValueError(
+                "inventory_client must be provided via dependency injection."
+            )
         self.settings = settings
         self.pre_checks: list[PreCheck] = (
             pre_checks if pre_checks is not None else [JenkinsJobPreCheck()]
@@ -69,7 +74,7 @@ class WaveRunner:
         )
         self.origin_deactivator: OriginDeactivator | None = origin_deactivator
         self._token_provider = token_provider or self._build_token_provider(settings)
-        self._inventory_client = inventory_client
+        self._inventory_client: InventoryClient = inventory_client
 
     @staticmethod
     def _build_token_provider(

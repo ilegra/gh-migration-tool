@@ -80,11 +80,14 @@ flowchart TD
 flowchart LR
     Caller["CLI (gh-migration-tool) or Custom Python SDK Script"] --> Loader["WaveLoader / FileWaveLoader"]
     Caller --> Settings["MigrationSettings (.env / Env Vars)"]
+    Caller --> InventoryClient["InventoryClient (e.g. gh_migration_inventory_manager.Inventory)"]
+    Caller --> TokenProvider["TokenProvider (e.g. GitHubAppTokenProvider)"]
     Caller --> Runner["WaveRunner"]
 
     Loader -->|"list[MigrationUnit]"| Runner
     Settings -->|"WaveContext"| Runner
-    TokenProvider["GitHubAppTokenProvider (JWT -> Installation Token)"] -->|"WaveContext"| Runner
+    InventoryClient -->|"DI (inventory_client)"| Runner
+    TokenProvider -->|"DI (token_provider -> WaveContext)"| Runner
 
     subgraph Extensible["Extensible Interfaces (gh_migration_tool.contracts)"]
         PreCheck["PreCheck (ABC)"]
@@ -120,7 +123,7 @@ flowchart LR
 | **4. Migration** | Extensible (`Migrator`) | `GitSyncMigrator` | Captures `OriginSnapshot` via `git ls-remote --heads`, then executes `gh-repo-sync` (`SyncManager.execute()`) in an isolated temp directory with token masking. |
 | **4.5. Pipeline Migration (Optional)** | Extensible (`list[PipelineMigrator]`) | — *(consumer-defined)* | Executes optional mutating post-mirroring hooks (e.g., CI/CD pipeline conversion or Jenkins job reconfiguration) sequentially per unit and in parallel across units before Stage 5. |
 | **5. Post-checks** | Extensible (`list[PostCheck]`) | `SourceDriftPostCheck`, `JenkinsTriggerPostCheck`, `GitHubActionsTriggerPostCheck` | Receives both `MigrationUnit` and `MigrationStageResult` (including `origin_snapshot`). Verifies no Source Drift occurred and optionally triggers/polls downstream CI. |
-| **6. Inventory Update** | Core Invariant | `update_inventory()` | Calls `gh_migration_inventory_manager.Inventory.update_progress()` for each verified unit to record `INVENTORY_TARGET_STATUS` in Google Sheets. |
+| **6. Inventory Update** | Core Invariant | `update_inventory()` | Calls `inventory_client.update_progress()` on the injected `InventoryClient` (such as `gh_migration_inventory_manager.Inventory`) for each verified unit to record `INVENTORY_TARGET_STATUS` in Google Sheets. |
 | **7. Migration Report** | Core Invariant | `build_wave_report()`, `ReportFormatter` | Aggregates every `UnitExecutionRecord` in manifest order into a `WaveReport` and renders `console`, `markdown`, or `json` output. |
 
 ### Why Extend `gh-migration-tool`?
@@ -135,36 +138,38 @@ By implementing the typed interfaces in `gh_migration_tool.contracts`, you reuse
 ### Extension Mechanisms & Concrete Examples
 
 > [!IMPORTANT]
-> **CLI vs. Python SDK**: The built-in `gh-migration-tool run` CLI uses the default stages (`JenkinsJobPreCheck`, `GitHubApiSetup`, `GitSyncMigrator`, `SourceDriftPostCheck`). To plug in custom `PreCheck`, `GitHubSetup`, `Migrator`, or `PostCheck` implementations, create a Python entrypoint script (example below) that passes your custom instances to `WaveRunner`.
+> **CLI vs. Python SDK**: The `gh-migration-tool run` CLI wires the default stages and builds `Inventory` and `GitHubAppTokenProvider` from `MigrationSettings`. When using the Python SDK, your entrypoint constructs and injects `inventory_client` (required) and `token_provider` alongside any custom stage implementations.
 
-All extension contracts live in `gh_migration_tool.contracts`:
-- `PreCheck`: implement `name` (`@property`) and `execute(self, unit: MigrationUnit, context: WaveContext) -> CheckResult`
-- `GitHubSetup`: implement `setup_unit(self, unit: MigrationUnit, context: WaveContext) -> SetupResult` (or override `setup_wave(self, candidates: list[MigrationUnit], context: WaveContext) -> dict[str, SetupResult]` for batch provisioning)
-- `Migrator`: implement `migrate(self, unit: MigrationUnit, context: WaveContext) -> MigrationStageResult`
-- `PostCheck`: implement `name` (`@property`) and `execute(self, unit: MigrationUnit, migration_result: MigrationStageResult, context: WaveContext) -> CheckResult`
-- `WaveLoader` (in `gh_migration_tool.contracts`): implement `load(self, source: Path) -> list[MigrationUnit]` if loading manifests from a custom format or API.
+All extension contracts live in [gh_migration_tool.contracts](src/gh_migration_tool/contracts.py):
 
-#### Example: Custom `PreCheck`, Bulk `GitHubSetup`, `PostCheck`, and Wiring into `WaveRunner`
+| Contract | Purpose |
+| :--- | :--- |
+| `WaveLoader` | Load `MigrationUnit` definitions from a custom source or format. |
+| `PreCheck` | Pre-migration readiness checks (per unit). |
+| `GitHubSetup` | Target repository provisioning (per unit or batch via `setup_wave`). |
+| `Migrator` | Source-to-GitHub repository synchronization. |
+| `PipelineMigrator` | Optional post-mirroring hooks (e.g., CI/CD pipeline conversion). |
+| `PostCheck` | Post-migration verification and CI triggers. |
+| `OriginDeactivator` | Optional origin repository freeze/deactivation after verification. |
+| `InventoryClient` | Structural protocol for Stage 6 inventory updates (e.g., `Inventory`). |
+| `TokenProvider` | Structural protocol for GitHub auth tokens (e.g., `GitHubAppTokenProvider`). |
 
-Save the following as `run_custom_wave.py`:
+#### Example: Extending Stages and Wiring `WaveRunner`
 
 ```python
 import sys
 from pathlib import Path
 
+from gh_migration_inventory_manager import Inventory
 from gh_migration_tool import (
     CheckResult,
     FileWaveLoader,
-    GitHubActionsTriggerPostCheck,
-    GitHubSetup,
+    GitHubAppTokenProvider,
     JenkinsJobPreCheck,
     MigrationSettings,
-    MigrationStageResult,
     MigrationUnit,
-    PostCheck,
     PreCheck,
     ReportFormatter,
-    SetupResult,
     SourceDriftPostCheck,
     UnitStatus,
     WaveContext,
@@ -173,7 +178,7 @@ from gh_migration_tool import (
 
 
 class FreezeWindowPreCheck(PreCheck):
-    """Custom Pre-check reading unit.metadata to enforce a migration freeze flag."""
+    """Block units marked with a change-freeze flag in manifest metadata."""
 
     @property
     def name(self) -> str:
@@ -181,88 +186,37 @@ class FreezeWindowPreCheck(PreCheck):
 
     def execute(self, unit: MigrationUnit, context: WaveContext) -> CheckResult:
         if unit.metadata.get("freeze_active", False):
-            return CheckResult(
-                check_name=self.name,
-                passed=False,
-                message=f"Unit '{unit.name}' is currently in a change-freeze window.",
-            )
-        return CheckResult(
-            check_name=self.name,
-            passed=True,
-            message="No active change freeze.",
-        )
-
-
-class BulkTerraformGitHubSetup(GitHubSetup):
-    """Custom GitHubSetup overriding setup_wave() for batch IaC provisioning."""
-
-    def setup_wave(
-        self, candidates: list[MigrationUnit], context: WaveContext
-    ) -> dict[str, SetupResult]:
-        if not candidates:
-            return {}
-        # Run your batch IaC / Terraform apply once for all Candidates here...
-        return {
-            unit.name: SetupResult(
-                unit_name=unit.name,
-                passed=True,
-                message="Provisioned via batch Terraform run.",
-                created=False,
-            )
-            for unit in candidates
-        }
-
-    def setup_unit(self, unit: MigrationUnit, context: WaveContext) -> SetupResult:
-        raise NotImplementedError("Handled in bulk via setup_wave().")
-
-
-class SyncStatsPostCheck(PostCheck):
-    """Custom Post-check verifying at least one branch was evaluated during Migration."""
-
-    @property
-    def name(self) -> str:
-        return "sync_stats_post_check"
-
-    def execute(
-        self,
-        unit: MigrationUnit,
-        migration_result: MigrationStageResult,
-        context: WaveContext,
-    ) -> CheckResult:
-        if not migration_result.evaluated_branches:
-            return CheckResult(
-                check_name=self.name,
-                passed=False,
-                message="No branches were evaluated during migration.",
-            )
-        return CheckResult(
-            check_name=self.name,
-            passed=True,
-            message=f"Evaluated {len(migration_result.evaluated_branches)} branch(es).",
-        )
+            return CheckResult(self.name, passed=False, message="Change freeze active.")
+        return CheckResult(self.name, passed=True)
 
 
 def main() -> int:
-    manifest_path = Path(sys.argv[1])
-    units = FileWaveLoader().load(manifest_path)
+    units = FileWaveLoader().load(Path(sys.argv[1]))
     settings = MigrationSettings()
+
+    inventory_client = Inventory(
+        spreadsheet_id=settings.google_spreadsheet_id,
+        credentials_path=settings.google_credentials_path,
+    )
+    token_provider = GitHubAppTokenProvider(
+        app_id=settings.github_app_id,
+        installation_id=settings.github_app_installation_id,
+        private_key=settings.github_app_private_key,
+        private_key_path=settings.github_app_private_key_path,
+        api_url=settings.github_api_url,
+    )
 
     runner = WaveRunner(
         settings=settings,
+        inventory_client=inventory_client,
+        token_provider=token_provider,
         pre_checks=[JenkinsJobPreCheck(), FreezeWindowPreCheck()],
-        github_setup=BulkTerraformGitHubSetup(),
-        post_checks=[
-            SourceDriftPostCheck(),
-            SyncStatsPostCheck(),
-            GitHubActionsTriggerPostCheck(),
-        ],
+        post_checks=[SourceDriftPostCheck()],
     )
 
     report = runner.run(units)
     print(ReportFormatter.to_markdown(report))
-
-    has_failures = any(rec.status != UnitStatus.SUCCEEDED for rec in report.records)
-    return 1 if has_failures else 0
+    return 1 if any(r.status != UnitStatus.SUCCEEDED for r in report.records) else 0
 
 
 if __name__ == "__main__":
@@ -430,7 +384,7 @@ gh-migration-tool run wave-manifest.yaml --format json --report-out migration-re
 gh-migration-tool run wave-manifest.yaml --origin-deactivator bitbucket-cloud
 ```
 
-> **Note on Origin Deactivation (Step 5.5):** When enabled via `--origin-deactivator bitbucket-cloud` (or `WaveRunner(..., origin_deactivator=BitbucketCloudOriginDeactivator())`), Step 5.5 runs **after `PostCheck`** and **before `Inventory Update`**. By default, `BitbucketCloudOriginDeactivator` adds a `"push"` branch restriction (`pattern: "*"`) so original permissions are preserved for analysis and rollback is straightforward (`ORIGIN_TOKEN` requires `repository:admin` scope). Individual units can opt out in the Wave Manifest with `deactivate_origin: false`. If deactivation fails, the unit is marked `ORIGIN_DEACTIVATION_FAILED` and `Inventory Update` is skipped.
+> **Note on Origin Deactivation (Step 5.5):** When enabled via `--origin-deactivator bitbucket-cloud` (or `WaveRunner(settings=settings, inventory_client=inventory_client, token_provider=token_provider, origin_deactivator=BitbucketCloudOriginDeactivator())`), Step 5.5 runs **after `PostCheck`** and **before `Inventory Update`**. By default, `BitbucketCloudOriginDeactivator` adds a `"push"` branch restriction (`pattern: "*"`) so original permissions are preserved for analysis and rollback is straightforward (`ORIGIN_TOKEN` requires `repository:admin` scope). Individual units can opt out in the Wave Manifest with `deactivate_origin: false`. If deactivation fails, the unit is marked `ORIGIN_DEACTIVATION_FAILED` and `Inventory Update` is skipped.
 
 **Exit codes:**
 - `0`: All Migration Units reached `UnitStatus.SUCCEEDED`.

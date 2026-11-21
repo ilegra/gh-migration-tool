@@ -7,10 +7,9 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
-    from gh_migration_tool.destinations.github.auth import GitHubAppTokenProvider
     from gh_migration_tool.settings import MigrationSettings
 
 RepoVisibility = Literal["private", "internal", "public"]
@@ -160,7 +159,7 @@ class WaveContext:
     def __init__(
         self,
         settings: MigrationSettings,
-        github_token_provider: GitHubAppTokenProvider | None = None,
+        github_token_provider: TokenProvider | None = None,
     ) -> None:
         self.settings = settings
         self.github_token_provider = github_token_provider
@@ -276,3 +275,24 @@ class OriginDeactivator(ABC):
         self, unit: MigrationUnit, context: WaveContext
     ) -> OriginDeactivationResult:
         """Deactivate or freeze the Origin repository for a verified unit."""
+
+
+@runtime_checkable
+class InventoryClient(Protocol):
+    """Structural contract for Stage 6 inventory persistence clients."""
+
+    def update_progress(
+        self,
+        repository_name: str,
+        status: str,
+        project: str | None = None,
+    ) -> Any:
+        """Update the migration status for a repository in the inventory."""
+
+
+@runtime_checkable
+class TokenProvider(Protocol):
+    """Structural contract for GitHub authentication token providers."""
+
+    def get_token(self) -> str:
+        """Return a valid GitHub access token."""

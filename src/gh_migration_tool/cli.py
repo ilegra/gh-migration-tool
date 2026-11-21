@@ -7,13 +7,24 @@ import logging
 import os
 import sys
 from pathlib import Path
+from typing import cast
 
-from gh_migration_tool.contracts import OriginDeactivator, UnitStatus
+from gh_migration_inventory_manager import Inventory
+
+from gh_migration_tool.contracts import (
+    InventoryClient,
+    OriginDeactivator,
+    TokenProvider,
+    UnitStatus,
+)
+from gh_migration_tool.destinations.github import GitHubAppTokenProvider
 from gh_migration_tool.engine.loader import FileWaveLoader
 from gh_migration_tool.engine.report import ReportFormatter
 from gh_migration_tool.origins.bitbucket_cloud import BitbucketCloudOriginDeactivator
 from gh_migration_tool.runner import WaveRunner
 from gh_migration_tool.settings import MigrationSettings
+
+logger = logging.getLogger(__name__)
 
 
 def _configure_logging() -> None:
@@ -22,6 +33,33 @@ def _configure_logging() -> None:
     logging.basicConfig(
         level=level,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    )
+
+
+def _build_inventory_client(settings: MigrationSettings) -> InventoryClient:
+    if not settings.google_spreadsheet_id.strip():
+        raise ValueError("GOOGLE_SPREADSHEET_ID is not configured.")
+    return cast(
+        InventoryClient,
+        Inventory(
+            spreadsheet_id=settings.google_spreadsheet_id,
+            credentials_path=settings.google_credentials_path,
+        ),
+    )
+
+
+def _build_token_provider(settings: MigrationSettings) -> TokenProvider | None:
+    if not settings.github_app_id or not settings.github_app_installation_id:
+        return None
+    if not settings.github_app_private_key and not settings.github_app_private_key_path:
+        return None
+    return GitHubAppTokenProvider(
+        app_id=settings.github_app_id,
+        installation_id=settings.github_app_installation_id,
+        private_key=settings.github_app_private_key,
+        private_key_path=settings.github_app_private_key_path,
+        api_url=settings.github_api_url,
+        timeout=settings.http_timeout_seconds,
     )
 
 
@@ -63,10 +101,21 @@ def main(argv: list[str] | None = None) -> int:
         loader = FileWaveLoader()
         units = loader.load(args.manifest)
         settings = MigrationSettings()
+        try:
+            inventory_client = _build_inventory_client(settings)
+        except ValueError as exc:
+            logger.error("Failed to initialize inventory client: %s", exc)
+            return 1
+        token_provider = _build_token_provider(settings)
         origin_deactivator: OriginDeactivator | None = None
         if args.origin_deactivator == "bitbucket-cloud":
             origin_deactivator = BitbucketCloudOriginDeactivator()
-        runner = WaveRunner(settings=settings, origin_deactivator=origin_deactivator)
+        runner = WaveRunner(
+            settings=settings,
+            inventory_client=inventory_client,
+            token_provider=token_provider,
+            origin_deactivator=origin_deactivator,
+        )
         report = runner.run(units)
 
         if args.format == "markdown":

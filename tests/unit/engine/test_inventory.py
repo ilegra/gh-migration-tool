@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from typing import Any, cast
+from unittest.mock import MagicMock
+
+import pytest
 
 from gh_migration_tool.contracts import MigrationUnit
 from gh_migration_tool.engine.inventory import update_inventory
@@ -36,28 +39,6 @@ def test_given_valid_inventory_client_when_updating_inventory_then_succeeds() ->
     )
 
 
-def test_given_configured_inventory_when_updating_inventory_then_enables_read_cache() -> (
-    None
-):
-    client = MagicMock()
-    settings = MigrationSettings(
-        GOOGLE_SPREADSHEET_ID="spreadsheet-id",
-        GOOGLE_CREDENTIALS_PATH="credentials.json",
-    )
-
-    with patch(
-        "gh_migration_tool.engine.inventory.Inventory", return_value=client
-    ) as inventory:
-        results = update_inventory([_unit()], settings)
-
-    inventory.assert_called_once_with(
-        spreadsheet_id="spreadsheet-id",
-        credentials_path="credentials.json",
-        use_cache=True,
-    )
-    assert results["service-a"].passed is True
-
-
 def test_given_failing_inventory_client_when_updating_inventory_then_marks_failed() -> (
     None
 ):
@@ -74,23 +55,21 @@ def test_given_failing_inventory_client_when_updating_inventory_then_marks_faile
     assert "Sheets API 503" in res.message
 
 
-def test_given_missing_spreadsheet_id_when_updating_inventory_then_marks_failed() -> (
+def test_given_none_inventory_client_when_updating_inventory_then_raises_value_error() -> (
     None
 ):
-    settings = MigrationSettings(GOOGLE_SPREADSHEET_ID="")
+    settings = MigrationSettings(GOOGLE_SPREADSHEET_ID="spreadsheet-id")
 
-    results = update_inventory([_unit()], settings, inventory_client=None)
-
-    res = results["service-a"]
-    assert res.unit_name == "service-a"
-    assert res.passed is False
-    assert res.target_status == "migrated"
-    assert "GOOGLE_SPREADSHEET_ID" in res.message
+    with pytest.raises(ValueError, match="inventory_client"):
+        update_inventory([_unit()], settings, inventory_client=cast(Any, None))
 
 
 def test_given_empty_verified_units_when_updating_inventory_then_returns_empty_dict() -> (
     None
 ):
-    results = update_inventory([], MigrationSettings())
+    client = MagicMock()
+
+    results = update_inventory([], MigrationSettings(), inventory_client=client)
 
     assert results == {}
+    client.update_progress.assert_not_called()

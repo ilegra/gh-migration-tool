@@ -38,6 +38,7 @@ def update_inventory(
         client = Inventory(
             spreadsheet_id=settings.google_spreadsheet_id,
             credentials_path=settings.google_credentials_path,
+            use_cache=True,
         )
 
     target_status = settings.inventory_target_status

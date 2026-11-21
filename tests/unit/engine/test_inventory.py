@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from gh_migration_tool.contracts import MigrationUnit
 from gh_migration_tool.engine.inventory import update_inventory
@@ -34,6 +34,28 @@ def test_given_valid_inventory_client_when_updating_inventory_then_succeeds() ->
         status="migrated",
         project="payments",
     )
+
+
+def test_given_configured_inventory_when_updating_inventory_then_enables_read_cache() -> (
+    None
+):
+    client = MagicMock()
+    settings = MigrationSettings(
+        GOOGLE_SPREADSHEET_ID="spreadsheet-id",
+        GOOGLE_CREDENTIALS_PATH="credentials.json",
+    )
+
+    with patch(
+        "gh_migration_tool.engine.inventory.Inventory", return_value=client
+    ) as inventory:
+        results = update_inventory([_unit()], settings)
+
+    inventory.assert_called_once_with(
+        spreadsheet_id="spreadsheet-id",
+        credentials_path="credentials.json",
+        use_cache=True,
+    )
+    assert results["service-a"].passed is True
 
 
 def test_given_failing_inventory_client_when_updating_inventory_then_marks_failed() -> (

@@ -513,3 +513,76 @@ def test_given_none_inventory_client_when_initializing_wave_runner_then_raises_v
             settings=MigrationSettings(),
             inventory_client=cast(Any, None),
         )
+
+
+def test_given_no_token_provider_when_running_wave_then_does_not_instantiate_token_provider_internally() -> (
+    None
+):
+    observed_providers: list[object] = []
+
+    class _RecordingPreCheck(PreCheck):
+        @property
+        def name(self) -> str:
+            return "recording_pre"
+
+        def execute(self, unit: MigrationUnit, context: WaveContext) -> CheckResult:
+            observed_providers.append(context.github_token_provider)
+            return CheckResult(self.name, True, "ok")
+
+    runner = WaveRunner(
+        settings=MigrationSettings(
+            GITHUB_APP_ID="12345",
+            GITHUB_APP_INSTALLATION_ID="67890",
+            GITHUB_APP_PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----\nfake",
+        ),
+        inventory_client=MagicMock(),
+        pre_checks=[_RecordingPreCheck()],
+        github_setup=_StubSetup(set()),
+        migrator=_StubMigrator(set()),
+        post_checks=[],
+    )
+
+    report = runner.run([_unit("repo-a")])
+
+    assert report.status_counts[UnitStatus.SUCCEEDED] == 1
+    assert observed_providers == [None]
+
+
+def test_given_injected_token_provider_when_running_wave_then_passes_it_in_wave_context() -> (
+    None
+):
+    class _StubTokenProvider:
+        def get_token(self) -> str:
+            return "injected-token"
+
+    observed_tokens: list[str | None] = []
+    provider = _StubTokenProvider()
+
+    class _TokenPreCheck(PreCheck):
+        @property
+        def name(self) -> str:
+            return "token_pre"
+
+        def execute(self, unit: MigrationUnit, context: WaveContext) -> CheckResult:
+            token = (
+                context.github_token_provider.get_token()
+                if context.github_token_provider is not None
+                else None
+            )
+            observed_tokens.append(token)
+            return CheckResult(self.name, True, "ok")
+
+    runner = WaveRunner(
+        settings=MigrationSettings(),
+        inventory_client=MagicMock(),
+        token_provider=provider,
+        pre_checks=[_TokenPreCheck()],
+        github_setup=_StubSetup(set()),
+        migrator=_StubMigrator(set()),
+        post_checks=[],
+    )
+
+    report = runner.run([_unit("repo-a")])
+
+    assert report.status_counts[UnitStatus.SUCCEEDED] == 1
+    assert observed_tokens == ["injected-token"]

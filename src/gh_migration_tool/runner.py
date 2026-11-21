@@ -21,15 +21,13 @@ from gh_migration_tool.contracts import (
     PipelineMigrator,
     PostCheck,
     PreCheck,
+    TokenProvider,
     UnitExecutionRecord,
     UnitStatus,
     WaveContext,
     WaveReport,
 )
-from gh_migration_tool.destinations.github import (
-    GitHubApiSetup,
-    GitHubAppTokenProvider,
-)
+from gh_migration_tool.destinations.github import GitHubApiSetup
 from gh_migration_tool.engine._concurrency import run_parallel_by_unit
 from gh_migration_tool.engine.git_sync import GitSyncMigrator, SourceDriftPostCheck
 from gh_migration_tool.engine.inventory import update_inventory
@@ -52,7 +50,7 @@ class WaveRunner:
         github_setup: GitHubSetup | None = None,
         migrator: Migrator | None = None,
         post_checks: list[PostCheck] | None = None,
-        token_provider: GitHubAppTokenProvider | None = None,
+        token_provider: TokenProvider | None = None,
         pipeline_migrators: Sequence[PipelineMigrator] | None = None,
         origin_deactivator: OriginDeactivator | None = None,
     ) -> None:
@@ -73,28 +71,8 @@ class WaveRunner:
             list(pipeline_migrators) if pipeline_migrators is not None else []
         )
         self.origin_deactivator: OriginDeactivator | None = origin_deactivator
-        self._token_provider = token_provider or self._build_token_provider(settings)
+        self._token_provider: TokenProvider | None = token_provider
         self._inventory_client: InventoryClient = inventory_client
-
-    @staticmethod
-    def _build_token_provider(
-        settings: MigrationSettings,
-    ) -> GitHubAppTokenProvider | None:
-        if not settings.github_app_id or not settings.github_app_installation_id:
-            return None
-        if (
-            not settings.github_app_private_key
-            and not settings.github_app_private_key_path
-        ):
-            return None
-        return GitHubAppTokenProvider(
-            app_id=settings.github_app_id,
-            installation_id=settings.github_app_installation_id,
-            private_key=settings.github_app_private_key,
-            private_key_path=settings.github_app_private_key_path,
-            api_url=settings.github_api_url,
-            timeout=settings.http_timeout_seconds,
-        )
 
     def run(self, units: list[MigrationUnit]) -> WaveReport:
         """Execute the 7-stage pipeline for the provided Migration Units."""

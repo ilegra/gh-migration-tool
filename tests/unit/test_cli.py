@@ -161,3 +161,67 @@ def test_given_missing_spreadsheet_id_when_running_cli_then_returns_1_without_ru
     assert exit_code == 1
     inventory_cls.assert_not_called()
     runner_cls.assert_not_called()
+
+
+def test_given_configured_github_app_when_running_cli_then_injects_token_provider_into_wave_runner(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest = _write_manifest(tmp_path)
+    monkeypatch.setenv("GOOGLE_SPREADSHEET_ID", "sheet-123")
+    monkeypatch.setenv("GITHUB_APP_ID", "12345")
+    monkeypatch.setenv("GITHUB_APP_INSTALLATION_ID", "67890")
+    monkeypatch.setenv("GITHUB_APP_PRIVATE_KEY", "pem-key-content")
+    monkeypatch.setenv("GITHUB_API_URL", "https://api.github.com")
+    mock_token_provider = MagicMock()
+    mock_runner = MagicMock()
+    mock_runner.run.return_value = _report(UnitStatus.SUCCEEDED)
+
+    with (
+        patch("gh_migration_tool.cli.Inventory", return_value=MagicMock()),
+        patch(
+            "gh_migration_tool.cli.GitHubAppTokenProvider",
+            return_value=mock_token_provider,
+        ) as provider_cls,
+        patch(
+            "gh_migration_tool.cli.WaveRunner", return_value=mock_runner
+        ) as runner_cls,
+    ):
+        exit_code = main(["run", str(manifest)])
+
+    assert exit_code == 0
+    provider_cls.assert_called_once_with(
+        app_id="12345",
+        installation_id="67890",
+        private_key="pem-key-content",
+        private_key_path=None,
+        api_url="https://api.github.com",
+        timeout=30.0,
+    )
+    assert runner_cls.call_args.kwargs["token_provider"] is mock_token_provider
+
+
+def test_given_unconfigured_github_app_when_running_cli_then_passes_none_token_provider(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest = _write_manifest(tmp_path)
+    monkeypatch.setenv("GOOGLE_SPREADSHEET_ID", "sheet-123")
+    monkeypatch.setenv("GITHUB_APP_ID", "")
+    monkeypatch.setenv("GITHUB_APP_INSTALLATION_ID", "")
+    monkeypatch.setenv("GITHUB_APP_PRIVATE_KEY", "")
+    mock_runner = MagicMock()
+    mock_runner.run.return_value = _report(UnitStatus.SUCCEEDED)
+
+    with (
+        patch("gh_migration_tool.cli.Inventory", return_value=MagicMock()),
+        patch("gh_migration_tool.cli.GitHubAppTokenProvider") as provider_cls,
+        patch(
+            "gh_migration_tool.cli.WaveRunner", return_value=mock_runner
+        ) as runner_cls,
+    ):
+        exit_code = main(["run", str(manifest)])
+
+    assert exit_code == 0
+    provider_cls.assert_not_called()
+    assert runner_cls.call_args.kwargs["token_provider"] is None

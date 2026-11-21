@@ -81,12 +81,13 @@ flowchart LR
     Caller["CLI (gh-migration-tool) or Custom Python SDK Script"] --> Loader["WaveLoader / FileWaveLoader"]
     Caller --> Settings["MigrationSettings (.env / Env Vars)"]
     Caller --> InventoryClient["InventoryClient (e.g. gh_migration_inventory_manager.Inventory)"]
+    Caller --> TokenProvider["TokenProvider (e.g. GitHubAppTokenProvider)"]
     Caller --> Runner["WaveRunner"]
 
     Loader -->|"list[MigrationUnit]"| Runner
     Settings -->|"WaveContext"| Runner
     InventoryClient -->|"DI (inventory_client)"| Runner
-    TokenProvider["GitHubAppTokenProvider (JWT -> Installation Token)"] -->|"WaveContext"| Runner
+    TokenProvider -->|"DI (token_provider -> WaveContext)"| Runner
 
     subgraph Extensible["Extensible Interfaces (gh_migration_tool.contracts)"]
         PreCheck["PreCheck (ABC)"]
@@ -159,6 +160,7 @@ from gh_migration_tool import (
     CheckResult,
     FileWaveLoader,
     GitHubActionsTriggerPostCheck,
+    GitHubAppTokenProvider,
     GitHubSetup,
     JenkinsJobPreCheck,
     MigrationSettings,
@@ -253,10 +255,19 @@ def main() -> int:
         spreadsheet_id=settings.google_spreadsheet_id,
         credentials_path=settings.google_credentials_path,
     )
+    token_provider = GitHubAppTokenProvider(
+        app_id=settings.github_app_id,
+        installation_id=settings.github_app_installation_id,
+        private_key=settings.github_app_private_key,
+        private_key_path=settings.github_app_private_key_path,
+        api_url=settings.github_api_url,
+        timeout=settings.http_timeout_seconds,
+    )
 
     runner = WaveRunner(
         settings=settings,
         inventory_client=inventory_client,
+        token_provider=token_provider,
         pre_checks=[JenkinsJobPreCheck(), FreezeWindowPreCheck()],
         github_setup=BulkTerraformGitHubSetup(),
         post_checks=[

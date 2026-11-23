@@ -1,6 +1,6 @@
 [project]
 name = "gh-migration-tool"
-version = "0.1.9"
+version = "0.1.10"
 description = "Extensible Python SDK and CLI for orchestrating 7-stage SCM-to-GitHub repository migrations"
 authors = [
     { name = "ilegra" }

@@ -15,8 +15,8 @@ dependencies = [
     "pyjwt[crypto]>=2.8.0",
     "requests>=2.31.0",
     "urllib3>=2.0.7",
-    "gh-repo-sync @ git+https://github.com/ilegra/gh-repo-sync.git@v1.1.1",
-    "gh-migration-inventory-manager @ git+https://github.com/ilegra/gh-migration-inventory-manager.git@v1.3.20",
+    "gh-repo-sync @ git+https://github.com/ilegra/gh-repo-sync.git@v1.1.17",
+    "gh-migration-inventory-manager @ git+https://github.com/ilegra/gh-migration-inventory-manager.git@v1.3.21",
 ]
 
 [project.scripts]

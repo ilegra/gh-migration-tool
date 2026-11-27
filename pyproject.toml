@@ -1,6 +1,6 @@
 [project]
 name = "gh-migration-tool"
-version = "0.1.10"
+version = "0.1.12"
 description = "Extensible Python SDK and CLI for orchestrating 7-stage SCM-to-GitHub repository migrations"
 authors = [
     { name = "ilegra" }
@@ -9,9 +9,9 @@ readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.10,<3.13"
 dependencies = [
-    "pydantic>=2.6.0",
+    "pydantic>=2.14.4",
     "pydantic-settings>=2.1.0",
-    "pyyaml>=6.0.1",
+    "pyyaml>=6.0.4",
     "pyjwt[crypto]>=2.8.0",
     "requests>=2.31.0",
     "urllib3>=2.0.7",
@@ -30,7 +30,7 @@ pytest = ">=8.0.0,<10.0.0"
 pytest-cov = ">=6.0.0,<8.0.0"
 pytest-mock = "^3.12.0"
 responses = ">=0.25,<0.27"
-ruff = ">=0.8.0"
+ruff = ">=0.17.6"
 mypy = ">=1.13.0"
 bandit = "^1.7.10"
 pre-commit = "^4.0.0"

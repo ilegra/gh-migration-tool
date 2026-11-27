@@ -6,7 +6,7 @@ import logging
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Literal
 
 from gh_migration_tool.contracts import (
     CheckResult,
@@ -37,6 +37,42 @@ from gh_migration_tool.origins.jenkins import JenkinsJobPreCheck
 from gh_migration_tool.settings import MigrationSettings
 
 logger = logging.getLogger(__name__)
+
+
+def run_origin_lock_operation(
+    origin_lock: OriginLock,
+    units: list[MigrationUnit],
+    context: WaveContext,
+    *,
+    operation: Literal["lock", "unlock"],
+    max_workers: int,
+    executor: ThreadPoolExecutor | None = None,
+) -> dict[str, OriginLockResult]:
+    """Execute an OriginLock lock or unlock operation in parallel with isolation."""
+    if not units:
+        return {}
+
+    invoke = origin_lock.lock if operation == "lock" else origin_lock.unlock
+
+    def _run_unit(unit: MigrationUnit) -> OriginLockResult:
+        try:
+            return invoke(unit, context)
+        except Exception as exc:
+            logger.error(
+                "OriginLock '%s' %s failed for unit '%s': %s",
+                origin_lock.name,
+                operation,
+                unit.name,
+                exc,
+            )
+            return OriginLockResult(
+                unit_name=unit.name,
+                passed=False,
+                lock_name=origin_lock.name,
+                message=str(exc),
+            )
+
+    return run_parallel_by_unit(units, _run_unit, max_workers, executor=executor)
 
 
 class WaveRunner:
@@ -163,11 +199,15 @@ class WaveRunner:
 
             # Step 5.5: Optional Origin Lock (parallel per unit)
             inventory_units = verified_units
-            newly_locked_unit_names: set[str] = set()
             if self.origin_lock is not None and verified_units:
                 to_lock = [u for u in verified_units if u.lock_origin]
-                lock_results = self._run_origin_lock(
-                    to_lock, context, max_workers, executor
+                lock_results = run_origin_lock_operation(
+                    self.origin_lock,
+                    to_lock,
+                    context,
+                    operation="lock",
+                    max_workers=max_workers,
+                    executor=executor,
                 )
                 inventory_units = []
                 for unit in verified_units:
@@ -178,8 +218,6 @@ class WaveRunner:
                     records[unit.name].origin_lock_result = l_res
                     if l_res is not None and l_res.passed:
                         inventory_units.append(unit)
-                        if not l_res.already_in_target_state:
-                            newly_locked_unit_names.add(unit.name)
                     else:
                         records[unit.name].status = UnitStatus.ORIGIN_LOCK_FAILED
                         records[unit.name].error_summary = (
@@ -188,49 +226,61 @@ class WaveRunner:
                             else "Origin lock failed."
                         )
 
-        # Step 6: Inventory Update (core stage)
-        inv_results = update_inventory(
-            inventory_units, self.settings, inventory_client=self._inventory_client
-        )
-        rollback_units: list[MigrationUnit] = []
-        for unit in inventory_units:
-            i_res = inv_results.get(unit.name)
-            records[unit.name].inventory_result = i_res
-            if i_res is None or not i_res.passed:
-                records[unit.name].status = UnitStatus.INVENTORY_UPDATE_FAILED
-                records[unit.name].error_summary = (
-                    i_res.message if i_res else "Inventory update returned no result."
-                )
-                if unit.name in newly_locked_unit_names:
-                    rollback_units.append(unit)
-
-        if self.origin_lock is not None and rollback_units:
-            logger.info(
-                "Rolling back origin lock for %d unit(s) after inventory update "
-                "failure",
-                len(rollback_units),
+            # Step 6: Inventory Update (core stage)
+            inv_results = update_inventory(
+                inventory_units, self.settings, inventory_client=self._inventory_client
             )
-            unlock_results = self._run_origin_unlock(
-                rollback_units, context, max_workers
-            )
-            for unit in rollback_units:
-                u_res = unlock_results.get(unit.name)
-                records[unit.name].origin_unlock_result = u_res
-                if u_res is None or not u_res.passed:
-                    rollback_err = (
-                        u_res.message
-                        if u_res and u_res.message
-                        else "Origin unlock rollback failed."
-                    )
-                    logger.error(
-                        "Origin lock rollback failed for unit '%s': %s",
-                        unit.name,
-                        rollback_err,
-                    )
+            rollback_units: list[MigrationUnit] = []
+            for unit in inventory_units:
+                i_res = inv_results.get(unit.name)
+                records[unit.name].inventory_result = i_res
+                if i_res is None or not i_res.passed:
+                    records[unit.name].status = UnitStatus.INVENTORY_UPDATE_FAILED
                     records[unit.name].error_summary = (
-                        f"{records[unit.name].error_summary}; "
-                        f"Rollback failed: {rollback_err}"
+                        i_res.message
+                        if i_res
+                        else "Inventory update returned no result."
                     )
+                    lock_res = records[unit.name].origin_lock_result
+                    if (
+                        lock_res is not None
+                        and lock_res.passed
+                        and not lock_res.already_in_target_state
+                    ):
+                        rollback_units.append(unit)
+
+            if self.origin_lock is not None and rollback_units:
+                logger.info(
+                    "Rolling back origin lock for %d unit(s) after inventory update "
+                    "failure",
+                    len(rollback_units),
+                )
+                unlock_results = run_origin_lock_operation(
+                    self.origin_lock,
+                    rollback_units,
+                    context,
+                    operation="unlock",
+                    max_workers=max_workers,
+                    executor=executor,
+                )
+                for unit in rollback_units:
+                    u_res = unlock_results.get(unit.name)
+                    records[unit.name].origin_unlock_result = u_res
+                    if u_res is None or not u_res.passed:
+                        rollback_err = (
+                            u_res.message
+                            if u_res and u_res.message
+                            else "Origin unlock rollback failed."
+                        )
+                        logger.error(
+                            "Origin lock rollback failed for unit '%s': %s",
+                            unit.name,
+                            rollback_err,
+                        )
+                        records[unit.name].error_summary = (
+                            f"{records[unit.name].error_summary}; "
+                            f"Rollback failed: {rollback_err}"
+                        )
 
         # Step 7: Migration Report (core stage)
         ordered_records: list[UnitExecutionRecord] = [records[u.name] for u in units]
@@ -356,62 +406,3 @@ class WaveRunner:
             lambda check, unit: check.execute(unit, mig_results[unit.name], context),
             executor,
         )
-
-    def _run_origin_lock(
-        self,
-        units: list[MigrationUnit],
-        context: WaveContext,
-        max_workers: int,
-        executor: ThreadPoolExecutor,
-    ) -> dict[str, OriginLockResult]:
-        origin_lock = self.origin_lock
-        if origin_lock is None or not units:
-            return {}
-
-        def _lock_unit(unit: MigrationUnit) -> OriginLockResult:
-            try:
-                return origin_lock.lock(unit, context)
-            except Exception as exc:
-                logger.error(
-                    "OriginLock '%s' lock failed for unit '%s': %s",
-                    origin_lock.name,
-                    unit.name,
-                    exc,
-                )
-                return OriginLockResult(
-                    unit_name=unit.name,
-                    passed=False,
-                    lock_name=origin_lock.name,
-                    message=str(exc),
-                )
-
-        return run_parallel_by_unit(units, _lock_unit, max_workers, executor=executor)
-
-    def _run_origin_unlock(
-        self,
-        units: list[MigrationUnit],
-        context: WaveContext,
-        max_workers: int,
-    ) -> dict[str, OriginLockResult]:
-        origin_lock = self.origin_lock
-        if origin_lock is None or not units:
-            return {}
-
-        def _unlock_unit(unit: MigrationUnit) -> OriginLockResult:
-            try:
-                return origin_lock.unlock(unit, context)
-            except Exception as exc:
-                logger.error(
-                    "OriginLock '%s' unlock failed for unit '%s': %s",
-                    origin_lock.name,
-                    unit.name,
-                    exc,
-                )
-                return OriginLockResult(
-                    unit_name=unit.name,
-                    passed=False,
-                    lock_name=origin_lock.name,
-                    message=str(exc),
-                )
-
-        return run_parallel_by_unit(units, _unlock_unit, max_workers)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import urllib.parse
+from collections.abc import Iterator
 from typing import Any
 
 import requests
@@ -38,9 +39,7 @@ def _parse_bitbucket_cloud_repo(origin_url: str) -> tuple[str, str]:
             f"Bitbucket Cloud URL '{origin_url}' must include workspace and repo slug."
         )
     workspace = parts[0]
-    repo_slug = parts[1]
-    if repo_slug.endswith(".git"):
-        repo_slug = repo_slug[:-4]
+    repo_slug = parts[1].removesuffix(".git")
     if not workspace or not repo_slug:
         raise ValueError(
             f"Bitbucket Cloud URL '{origin_url}' has empty workspace or repo slug."
@@ -67,7 +66,7 @@ class BitbucketCloudOriginLock(OriginLock):
         prepared = self._prepare_request(unit, context, operation="lock")
         if isinstance(prepared, OriginLockResult):
             return prepared
-        session, repo_api, headers, auth, workspace, repo_slug = prepared
+        session, repo_api, workspace, repo_slug = prepared
 
         details: dict[str, Any] = {
             "workspace": workspace,
@@ -75,9 +74,8 @@ class BitbucketCloudOriginLock(OriginLock):
             "push_restriction_added": False,
         }
         try:
-            added, already_locked = self._ensure_push_restriction(
-                session, repo_api, headers, auth
-            )
+            with session:
+                added, already_locked = self._ensure_push_restriction(session, repo_api)
             details["push_restriction_added"] = added
         except requests.HTTPError as exc:
             return self._handle_http_error(unit, exc, details, operation="lock")
@@ -109,7 +107,7 @@ class BitbucketCloudOriginLock(OriginLock):
         prepared = self._prepare_request(unit, context, operation="unlock")
         if isinstance(prepared, OriginLockResult):
             return prepared
-        session, repo_api, headers, auth, workspace, repo_slug = prepared
+        session, repo_api, workspace, repo_slug = prepared
 
         details: dict[str, Any] = {
             "workspace": workspace,
@@ -117,9 +115,10 @@ class BitbucketCloudOriginLock(OriginLock):
             "push_restrictions_removed": 0,
         }
         try:
-            removed_count, already_unlocked = self._remove_push_restrictions(
-                session, repo_api, headers, auth
-            )
+            with session:
+                removed_count, already_unlocked = self._remove_push_restrictions(
+                    session, repo_api
+                )
             details["push_restrictions_removed"] = removed_count
         except requests.HTTPError as exc:
             return self._handle_http_error(unit, exc, details, operation="unlock")
@@ -154,24 +153,14 @@ class BitbucketCloudOriginLock(OriginLock):
         context: WaveContext,
         *,
         operation: str,
-    ) -> (
-        tuple[
-            requests.Session,
-            str,
-            dict[str, str],
-            tuple[str, str] | None,
-            str,
-            str,
-        ]
-        | OriginLockResult
-    ):
+    ) -> tuple[requests.Session, str, str, str] | OriginLockResult:
         token = context.settings.origin_token.strip()
         if not token:
             return OriginLockResult(
                 unit_name=unit.name,
                 passed=False,
                 lock_name=self.name,
-                message=(f"ORIGIN_TOKEN is required for Bitbucket Cloud {operation}."),
+                message=f"ORIGIN_TOKEN is required for Bitbucket Cloud {operation}.",
             )
 
         try:
@@ -189,19 +178,18 @@ class BitbucketCloudOriginLock(OriginLock):
             max_retries=context.settings.http_max_retries,
             backoff_factor=context.settings.http_backoff_factor,
         )
-        headers: dict[str, str] = {"Accept": "application/json"}
-        auth: tuple[str, str] | None = None
+        session.headers["Accept"] = "application/json"
         if context.settings.origin_username:
-            auth = (context.settings.origin_username, token)
+            session.auth = (context.settings.origin_username, token)
         else:
-            headers["Authorization"] = f"Bearer {token}"
+            session.headers["Authorization"] = f"Bearer {token}"
 
         repo_api = (
             f"{BITBUCKET_API_BASE}/repositories/"
             f"{urllib.parse.quote(workspace, safe='')}/"
             f"{urllib.parse.quote(repo_slug, safe='')}"
         )
-        return session, repo_api, headers, auth, workspace, repo_slug
+        return session, repo_api, workspace, repo_slug
 
     def _handle_http_error(
         self,
@@ -258,38 +246,30 @@ class BitbucketCloudOriginLock(OriginLock):
         )
 
     @staticmethod
-    def _paginate(
+    def _iter_paginated(
         session: requests.Session,
         url: str,
-        headers: dict[str, str],
-        auth: tuple[str, str] | None,
-    ) -> list[dict[str, Any]]:
-        items: list[dict[str, Any]] = []
+    ) -> Iterator[dict[str, Any]]:
         next_url: str | None = url
         while next_url:
-            resp = session.get(next_url, headers=headers, auth=auth)
+            resp = session.get(next_url)
             resp.raise_for_status()
             payload = resp.json()
-            items.extend(payload.get("values", []))
+            yield from payload.get("values", [])
             next_url = payload.get("next")
-        return items
 
     def _ensure_push_restriction(
         self,
         session: requests.Session,
         repo_api: str,
-        headers: dict[str, str],
-        auth: tuple[str, str] | None,
     ) -> tuple[bool, bool]:
         restrictions_url = f"{repo_api}/branch-restrictions"
-        existing = self._paginate(session, restrictions_url, headers, auth)
+        existing = self._iter_paginated(session, restrictions_url)
         if any(self._is_global_push_restriction(rule) for rule in existing):
             return False, True
 
         resp = session.post(
             restrictions_url,
-            headers={**headers, "Content-Type": "application/json"},
-            auth=auth,
             json={
                 "kind": PUSH_RESTRICTION_KIND,
                 "branch_match_kind": PUSH_RESTRICTION_BRANCH_MATCH_KIND,
@@ -303,14 +283,11 @@ class BitbucketCloudOriginLock(OriginLock):
         self,
         session: requests.Session,
         repo_api: str,
-        headers: dict[str, str],
-        auth: tuple[str, str] | None,
     ) -> tuple[int, bool]:
         restrictions_url = f"{repo_api}/branch-restrictions"
-        existing = self._paginate(session, restrictions_url, headers, auth)
         matching_ids = [
             rule["id"]
-            for rule in existing
+            for rule in self._iter_paginated(session, restrictions_url)
             if self._is_global_push_restriction(rule) and rule.get("id") is not None
         ]
         if not matching_ids:
@@ -320,7 +297,7 @@ class BitbucketCloudOriginLock(OriginLock):
             delete_url = (
                 f"{restrictions_url}/{urllib.parse.quote(str(rule_id), safe='')}"
             )
-            resp = session.delete(delete_url, headers=headers, auth=auth)
+            resp = session.delete(delete_url)
             resp.raise_for_status()
 
         return len(matching_ids), False

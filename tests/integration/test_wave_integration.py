@@ -7,7 +7,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import responses
+
 from gh_migration_tool import (
+    BitbucketCloudOriginLock,
     CheckResult,
     FileWaveLoader,
     GitHubSetup,
@@ -274,10 +277,6 @@ units:
 def test_given_bitbucket_origin_lock_when_running_wave_then_locks_succeeded_rolls_back_on_inventory_failure_and_skips_on_lock_failure(
     tmp_path: Path,
 ) -> None:
-    import responses as responses_lib
-
-    from gh_migration_tool.origins.bitbucket_cloud.lock import BitbucketCloudOriginLock
-
     manifest = tmp_path / "wave_lock.yaml"
     manifest.write_text(
         """
@@ -299,22 +298,6 @@ units:
         encoding="utf-8",
     )
 
-    class _PassSetup(GitHubSetup):
-        def setup_unit(self, unit: MigrationUnit, context: WaveContext) -> SetupResult:
-            return SetupResult(unit.name, True)
-
-    class _PassMigrator(Migrator):
-        def migrate(
-            self, unit: MigrationUnit, context: WaveContext
-        ) -> MigrationStageResult:
-            return MigrationStageResult(
-                unit_name=unit.name,
-                passed=True,
-                origin_snapshot=OriginSnapshot(
-                    datetime.now(timezone.utc), {"main": "sha1"}
-                ),
-            )
-
     units = FileWaveLoader().load(manifest)
     inv_client = MagicMock()
 
@@ -327,42 +310,42 @@ units:
     inv_client.update_progress.side_effect = _update_progress
     settings = MigrationSettings(origin_token="bb-admin-token", http_max_retries=0)
 
-    with responses_lib.RequestsMock() as rsps:
+    with responses.RequestsMock() as rsps:
         # repo-lock-ok: lock succeeds
         rsps.add(
-            responses_lib.GET,
+            responses.GET,
             "https://api.bitbucket.org/2.0/repositories/acme-ws/repo-lock-ok/branch-restrictions",
             json={"values": []},
             status=200,
         )
         rsps.add(
-            responses_lib.POST,
+            responses.POST,
             "https://api.bitbucket.org/2.0/repositories/acme-ws/repo-lock-ok/branch-restrictions",
             json={"id": 1, "kind": "push", "pattern": "*"},
             status=201,
         )
         # repo-lock-fail: lock returns HTTP 403
         rsps.add(
-            responses_lib.GET,
+            responses.GET,
             "https://api.bitbucket.org/2.0/repositories/acme-ws/repo-lock-fail/branch-restrictions",
             json={"error": {"message": "Forbidden"}},
             status=403,
         )
         # repo-inv-fail-rollback: lock succeeds, then inventory fails -> automatic unlock
         rsps.add(
-            responses_lib.GET,
+            responses.GET,
             "https://api.bitbucket.org/2.0/repositories/acme-ws/repo-inv-fail-rollback/branch-restrictions",
             json={"values": []},
             status=200,
         )
         rsps.add(
-            responses_lib.POST,
+            responses.POST,
             "https://api.bitbucket.org/2.0/repositories/acme-ws/repo-inv-fail-rollback/branch-restrictions",
             json={"id": 77, "kind": "push", "pattern": "*"},
             status=201,
         )
         rsps.add(
-            responses_lib.GET,
+            responses.GET,
             "https://api.bitbucket.org/2.0/repositories/acme-ws/repo-inv-fail-rollback/branch-restrictions",
             json={
                 "values": [
@@ -378,7 +361,7 @@ units:
             status=200,
         )
         rsps.add(
-            responses_lib.DELETE,
+            responses.DELETE,
             "https://api.bitbucket.org/2.0/repositories/acme-ws/repo-inv-fail-rollback/branch-restrictions/77",
             status=204,
         )
@@ -437,22 +420,6 @@ units:
 """,
         encoding="utf-8",
     )
-
-    class _PassSetup(GitHubSetup):
-        def setup_unit(self, unit: MigrationUnit, context: WaveContext) -> SetupResult:
-            return SetupResult(unit.name, True)
-
-    class _PassMigrator(Migrator):
-        def migrate(
-            self, unit: MigrationUnit, context: WaveContext
-        ) -> MigrationStageResult:
-            return MigrationStageResult(
-                unit_name=unit.name,
-                passed=True,
-                origin_snapshot=OriginSnapshot(
-                    datetime.now(timezone.utc), {"main": "sha1"}
-                ),
-            )
 
     units = FileWaveLoader().load(manifest)
     inv_client = MagicMock()

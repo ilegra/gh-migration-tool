@@ -13,19 +13,16 @@ from gh_migration_inventory_manager import Inventory
 
 from gh_migration_tool.contracts import (
     InventoryClient,
-    MigrationUnit,
     OriginLock,
-    OriginLockResult,
     TokenProvider,
     UnitStatus,
     WaveContext,
 )
 from gh_migration_tool.destinations.github import GitHubAppTokenProvider
-from gh_migration_tool.engine._concurrency import run_parallel_by_unit
 from gh_migration_tool.engine.loader import FileWaveLoader
 from gh_migration_tool.engine.report import ReportFormatter
 from gh_migration_tool.origins.bitbucket_cloud import BitbucketCloudOriginLock
-from gh_migration_tool.runner import WaveRunner
+from gh_migration_tool.runner import WaveRunner, run_origin_lock_operation
 from gh_migration_tool.settings import MigrationSettings
 
 logger = logging.getLogger(__name__)
@@ -162,26 +159,12 @@ def main(argv: list[str] | None = None) -> int:
 
         context = WaveContext(settings=settings)
         target_units = [u for u in units if u.lock_origin]
-
-        def _unlock_unit(unit: MigrationUnit) -> OriginLockResult:
-            try:
-                return origin_lock.unlock(unit, context)
-            except Exception as exc:
-                logger.error(
-                    "OriginLock '%s' unlock failed for unit '%s': %s",
-                    origin_lock.name,
-                    unit.name,
-                    exc,
-                )
-                return OriginLockResult(
-                    unit_name=unit.name,
-                    passed=False,
-                    lock_name=origin_lock.name,
-                    message=str(exc),
-                )
-
-        results = run_parallel_by_unit(
-            target_units, _unlock_unit, max(1, settings.max_workers)
+        results = run_origin_lock_operation(
+            origin_lock,
+            target_units,
+            context,
+            operation="unlock",
+            max_workers=settings.max_workers,
         )
         has_failures = False
         for unit in target_units:

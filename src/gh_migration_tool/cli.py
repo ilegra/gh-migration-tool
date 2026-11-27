@@ -13,14 +13,18 @@ from gh_migration_inventory_manager import Inventory
 
 from gh_migration_tool.contracts import (
     InventoryClient,
-    OriginDeactivator,
+    MigrationUnit,
+    OriginLock,
+    OriginLockResult,
     TokenProvider,
     UnitStatus,
+    WaveContext,
 )
 from gh_migration_tool.destinations.github import GitHubAppTokenProvider
+from gh_migration_tool.engine._concurrency import run_parallel_by_unit
 from gh_migration_tool.engine.loader import FileWaveLoader
 from gh_migration_tool.engine.report import ReportFormatter
-from gh_migration_tool.origins.bitbucket_cloud import BitbucketCloudOriginDeactivator
+from gh_migration_tool.origins.bitbucket_cloud import BitbucketCloudOriginLock
 from gh_migration_tool.runner import WaveRunner
 from gh_migration_tool.settings import MigrationSettings
 
@@ -63,8 +67,14 @@ def _build_token_provider(settings: MigrationSettings) -> TokenProvider | None:
     )
 
 
+def _build_origin_lock(provider: str) -> OriginLock | None:
+    if provider == "bitbucket-cloud":
+        return BitbucketCloudOriginLock()
+    return None
+
+
 def main(argv: list[str] | None = None) -> int:
-    """CLI entrypoint for executing a Migration Wave from a manifest file."""
+    """CLI entrypoint for executing or unlocking a Migration Wave from a manifest."""
     parser = argparse.ArgumentParser(
         prog="gh-migration-tool",
         description="Execute a 7-stage SCM-to-GitHub Migration Wave.",
@@ -86,12 +96,22 @@ def main(argv: list[str] | None = None) -> int:
         help="Optional path to write the rendered report",
     )
     run_parser.add_argument(
-        "--origin-deactivator",
+        "--origin-lock",
         choices=["none", "bitbucket-cloud"],
         default="none",
-        help=(
-            "Optional origin repository deactivator for verified units (default: none)"
-        ),
+        help="Optional origin repository lock for verified units (default: none)",
+    )
+
+    unlock_parser = subparsers.add_parser(
+        "unlock",
+        help="Unlock origin repositories for units in a Wave Manifest",
+    )
+    unlock_parser.add_argument("manifest", type=Path, help="Path to YAML/JSON manifest")
+    unlock_parser.add_argument(
+        "--origin-lock",
+        choices=["bitbucket-cloud"],
+        required=True,
+        help="Origin repository lock provider to unlock",
     )
 
     args = parser.parse_args(argv)
@@ -107,14 +127,12 @@ def main(argv: list[str] | None = None) -> int:
             logger.error("Failed to initialize inventory client: %s", exc)
             return 1
         token_provider = _build_token_provider(settings)
-        origin_deactivator: OriginDeactivator | None = None
-        if args.origin_deactivator == "bitbucket-cloud":
-            origin_deactivator = BitbucketCloudOriginDeactivator()
+        origin_lock = _build_origin_lock(args.origin_lock)
         runner = WaveRunner(
             settings=settings,
             inventory_client=inventory_client,
             token_provider=token_provider,
-            origin_deactivator=origin_deactivator,
+            origin_lock=origin_lock,
         )
         report = runner.run(units)
 
@@ -131,6 +149,47 @@ def main(argv: list[str] | None = None) -> int:
             print(rendered)
 
         has_failures = any(rec.status != UnitStatus.SUCCEEDED for rec in report.records)
+        return 1 if has_failures else 0
+
+    if args.command == "unlock":
+        loader = FileWaveLoader()
+        units = loader.load(args.manifest)
+        settings = MigrationSettings()
+        origin_lock = _build_origin_lock(args.origin_lock)
+        if origin_lock is None:
+            logger.error("Unsupported origin lock provider: %s", args.origin_lock)
+            return 1
+
+        context = WaveContext(settings=settings)
+        target_units = [u for u in units if u.lock_origin]
+
+        def _unlock_unit(unit: MigrationUnit) -> OriginLockResult:
+            try:
+                return origin_lock.unlock(unit, context)
+            except Exception as exc:
+                logger.error(
+                    "OriginLock '%s' unlock failed for unit '%s': %s",
+                    origin_lock.name,
+                    unit.name,
+                    exc,
+                )
+                return OriginLockResult(
+                    unit_name=unit.name,
+                    passed=False,
+                    lock_name=origin_lock.name,
+                    message=str(exc),
+                )
+
+        results = run_parallel_by_unit(
+            target_units, _unlock_unit, max(1, settings.max_workers)
+        )
+        has_failures = False
+        for unit in target_units:
+            res = results[unit.name]
+            status_label = "UNLOCKED" if res.passed else "FAILED"
+            print(f"  [{status_label}] {unit.name} - {res.message}")
+            if not res.passed:
+                has_failures = True
         return 1 if has_failures else 0
 
     return 0

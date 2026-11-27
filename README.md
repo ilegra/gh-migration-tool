@@ -150,7 +150,7 @@ All extension contracts live in [gh_migration_tool.contracts](src/gh_migration_t
 | `Migrator` | Source-to-GitHub repository synchronization. |
 | `PipelineMigrator` | Optional post-mirroring hooks (e.g., CI/CD pipeline conversion). |
 | `PostCheck` | Post-migration verification and CI triggers. |
-| `OriginDeactivator` | Optional origin repository freeze/deactivation after verification. |
+| `OriginLock` | Optional reversible origin repository lock/unlock (`lock()` & `unlock()`) after verification with automatic rollback on Inventory Update failure. |
 | `InventoryClient` | Structural protocol for Stage 6 inventory updates (e.g., `Inventory`). |
 | `TokenProvider` | Structural protocol for GitHub auth tokens (e.g., `GitHubAppTokenProvider`). |
 
@@ -383,11 +383,14 @@ gh-migration-tool run wave-manifest.yaml --format markdown --report-out migratio
 # Run wave and save JSON report to file
 gh-migration-tool run wave-manifest.yaml --format json --report-out migration-report.json
 
-# Run wave and freeze Bitbucket Cloud origin repositories after Post-checks
-gh-migration-tool run wave-manifest.yaml --origin-deactivator bitbucket-cloud
+# Run wave and lock Bitbucket Cloud origin repositories after Post-checks
+gh-migration-tool run wave-manifest.yaml --origin-lock bitbucket-cloud
+
+# Roll back / unlock Bitbucket Cloud origin repositories for a wave manifest
+gh-migration-tool unlock wave-manifest.yaml --origin-lock bitbucket-cloud
 ```
 
-> **Note on Origin Deactivation (Step 5.5):** When enabled via `--origin-deactivator bitbucket-cloud` (or `WaveRunner(settings=settings, inventory_client=inventory_client, token_provider=token_provider, origin_deactivator=BitbucketCloudOriginDeactivator())`), Step 5.5 runs **after `PostCheck`** and **before `Inventory Update`**. By default, `BitbucketCloudOriginDeactivator` adds a `"push"` branch restriction (`pattern: "*"`) so original permissions are preserved for analysis and rollback is straightforward (`ORIGIN_TOKEN` requires `repository:admin` scope). Individual units can opt out in the Wave Manifest with `deactivate_origin: false`. If deactivation fails, the unit is marked `ORIGIN_DEACTIVATION_FAILED` and `Inventory Update` is skipped.
+> **Note on Origin Lock (Step 5.5) & Rollback:** When enabled via `--origin-lock bitbucket-cloud` (or `WaveRunner(settings=settings, inventory_client=inventory_client, token_provider=token_provider, origin_lock=BitbucketCloudOriginLock())`), Step 5.5 runs **after `PostCheck`** and **before `Inventory Update`**. `BitbucketCloudOriginLock.lock()` adds a global `"push"` branch restriction (`pattern: "*"`) while preserving all original user and group permissions (`ORIGIN_TOKEN` requires `repository:admin` scope), and `BitbucketCloudOriginLock.unlock()` deletes that restriction to restore write access. Individual units can opt out in the Wave Manifest with `lock_origin: false`. If locking fails, the unit is marked `ORIGIN_LOCK_FAILED` and `Inventory Update` is skipped. If `Inventory Update` fails for a unit newly locked in the run, `WaveRunner` automatically invokes `unlock()` to revert the origin repository. You can also unlock a wave manually at any time using `gh-migration-tool unlock <manifest> --origin-lock bitbucket-cloud`.
 
 **Exit codes:**
 - `0`: All Migration Units reached `UnitStatus.SUCCEEDED`.

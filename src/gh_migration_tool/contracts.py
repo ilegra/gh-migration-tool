@@ -25,7 +25,7 @@ class UnitStatus(str, Enum):
     MIGRATION_FAILED = "MIGRATION_FAILED"
     PIPELINE_MIGRATION_FAILED = "PIPELINE_MIGRATION_FAILED"
     POST_CHECK_FAILED = "POST_CHECK_FAILED"
-    ORIGIN_DEACTIVATION_FAILED = "ORIGIN_DEACTIVATION_FAILED"
+    ORIGIN_LOCK_FAILED = "ORIGIN_LOCK_FAILED"
     INVENTORY_UPDATE_FAILED = "INVENTORY_UPDATE_FAILED"
 
 
@@ -48,7 +48,7 @@ class MigrationUnit:
     rulesets: list[dict[str, Any]] = field(default_factory=list)
     jenkins_job: str | None = None
     github_workflow: str | None = None
-    deactivate_origin: bool = True
+    lock_origin: bool = True
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
@@ -106,13 +106,13 @@ class PipelineMigrationResult:
 
 
 @dataclass
-class OriginDeactivationResult:
-    """Outcome of the Origin Deactivation stage for a single Migration Unit."""
+class OriginLockResult:
+    """Outcome of an Origin Lock or Unlock operation for a single Migration Unit."""
 
     unit_name: str
     passed: bool
-    deactivator_name: str = ""
-    already_disabled: bool = False
+    lock_name: str = ""
+    already_in_target_state: bool = False
     message: str = ""
     details: dict[str, Any] = field(default_factory=dict)
 
@@ -138,7 +138,8 @@ class UnitExecutionRecord:
     migration_result: MigrationStageResult | None = None
     pipeline_migrations: list[PipelineMigrationResult] = field(default_factory=list)
     post_checks: list[CheckResult] = field(default_factory=list)
-    origin_deactivation_result: OriginDeactivationResult | None = None
+    origin_lock_result: OriginLockResult | None = None
+    origin_unlock_result: OriginLockResult | None = None
     inventory_result: InventoryUpdateResult | None = None
     error_summary: str = ""
 
@@ -263,19 +264,21 @@ class PostCheck(ABC):
         """Execute the Post-check for a single migrated Migration Unit."""
 
 
-class OriginDeactivator(ABC):
-    """Extensible interface for optional Step 5.5 (Origin Deactivation)."""
+class OriginLock(ABC):
+    """Extensible reversible interface for optional Step 5.5 (Origin Lock)."""
 
     @property
     @abstractmethod
     def name(self) -> str:
-        """Human-readable identifier for this OriginDeactivator."""
+        """Human-readable identifier for this OriginLock."""
 
     @abstractmethod
-    def deactivate(
-        self, unit: MigrationUnit, context: WaveContext
-    ) -> OriginDeactivationResult:
-        """Deactivate or freeze the Origin repository for a verified unit."""
+    def lock(self, unit: MigrationUnit, context: WaveContext) -> OriginLockResult:
+        """Lock or freeze the Origin repository for a verified unit."""
+
+    @abstractmethod
+    def unlock(self, unit: MigrationUnit, context: WaveContext) -> OriginLockResult:
+        """Unlock or restore the Origin repository to its previous writable state."""
 
 
 @runtime_checkable

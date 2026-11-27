@@ -66,9 +66,9 @@ _Avoid_: Smoke test, verification, audit
 Any new commit on a migrated branch or any new branch created on the origin SCM after the Origin Snapshot was captured at the start of Migration, resulting in a failed Post-check for that Migration Unit.
 _Avoid_: Out-of-sync, race condition, delta
 
-**Origin Deactivation**:
-An optional stage (Step 5.5) executed after Post-checks pass and before Inventory Update that freezes or deactivates the origin repository (e.g., via `BitbucketCloudOriginDeactivator` adding a `"push"` branch restriction) to prevent further pushes. If deactivation fails, the unit is marked `ORIGIN_DEACTIVATION_FAILED` and Inventory Update is skipped.
-_Avoid_: Deletion, archival, teardown
+**Origin Lock**:
+An optional reversible stage (Step 5.5) executed after Post-checks pass and before Inventory Update that locks the origin repository against writes (e.g., via `BitbucketCloudOriginLock` adding a global `"push"` branch restriction) and implements a matching `unlock()` operation to restore the repository to its previous writable state. If locking fails, the unit is marked `ORIGIN_LOCK_FAILED` and Inventory Update is skipped. If Inventory Update fails after a unit was locked during the run, `WaveRunner` automatically calls `unlock()` to roll back the lock.
+_Avoid_: Deletion, archival, teardown, one-way deactivation
 
 **Inventory Update**:
 The post-verification stage that records the updated lifecycle status of each successfully migrated and verified Migration Unit in the central migration inventory (`gh-migration-inventory-manager`).

@@ -8,8 +8,8 @@ from gh_migration_tool.contracts import (
     MigrationStageResult,
     MigrationUnit,
     Migrator,
-    OriginDeactivationResult,
-    OriginDeactivator,
+    OriginLock,
+    OriginLockResult,
     OriginSnapshot,
     PipelineMigrationResult,
     PipelineMigrator,
@@ -36,7 +36,7 @@ from gh_migration_tool.engine import (
     SourceDriftPostCheck,
 )
 from gh_migration_tool.origins import (
-    BitbucketCloudOriginDeactivator,
+    BitbucketCloudOriginLock,
     JenkinsJobPreCheck,
     JenkinsTriggerPostCheck,
 )
@@ -46,7 +46,7 @@ from gh_migration_tool.settings import MigrationSettings
 __version__ = "0.1.0"
 
 __all__ = [
-    "BitbucketCloudOriginDeactivator",
+    "BitbucketCloudOriginLock",
     "CheckResult",
     "FileWaveLoader",
     "GitHubActionsTriggerPostCheck",
@@ -62,8 +62,8 @@ __all__ = [
     "MigrationStageResult",
     "MigrationUnit",
     "Migrator",
-    "OriginDeactivationResult",
-    "OriginDeactivator",
+    "OriginLock",
+    "OriginLockResult",
     "OriginSnapshot",
     "PipelineMigrationResult",
     "PipelineMigrator",

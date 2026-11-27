@@ -53,7 +53,7 @@ def test_given_execution_records_when_building_and_formatting_report_then_render
         UnitStatus.MIGRATION_FAILED: 1,
         UnitStatus.PIPELINE_MIGRATION_FAILED: 0,
         UnitStatus.POST_CHECK_FAILED: 0,
-        UnitStatus.ORIGIN_DEACTIVATION_FAILED: 0,
+        UnitStatus.ORIGIN_LOCK_FAILED: 0,
         UnitStatus.INVENTORY_UPDATE_FAILED: 0,
     }
 

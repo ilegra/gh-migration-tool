@@ -712,3 +712,60 @@ def test_given_injected_token_provider_when_running_wave_then_passes_it_in_wave_
 
     assert report.status_counts[UnitStatus.SUCCEEDED] == 1
     assert observed_tokens == ["injected-token"]
+
+
+def test_given_tuple_check_sequences_when_initializing_wave_runner_then_stores_lists_and_runs_checks() -> (
+    None
+):
+    pre_check = _StubPreCheck(set())
+    post_check = _StubPostCheck(set())
+
+    runner = WaveRunner(
+        settings=MigrationSettings(MAX_WORKERS=1),
+        inventory_client=MagicMock(),
+        pre_checks=(pre_check,),
+        github_setup=_StubSetup(set()),
+        migrator=_StubMigrator(set()),
+        post_checks=(post_check,),
+    )
+
+    assert runner.pre_checks == [pre_check]
+    assert runner.post_checks == [post_check]
+
+    report = runner.run([_unit("repo-a")])
+
+    assert report.total_units == 1
+    assert report.status_counts[UnitStatus.SUCCEEDED] == 1
+    assert [c.check_name for c in report.records[0].pre_checks] == ["stub_pre"]
+    assert [c.check_name for c in report.records[0].post_checks] == ["stub_post"]
+
+
+def test_given_mutable_subtype_check_lists_when_mutated_after_init_then_wave_runner_keeps_defensive_copies() -> (
+    None
+):
+    pre_check = _StubPreCheck(set())
+    post_check = _StubPostCheck(set())
+    caller_pre_checks: list[_StubPreCheck] = [pre_check]
+    caller_post_checks: list[_StubPostCheck] = [post_check]
+
+    runner = WaveRunner(
+        settings=MigrationSettings(MAX_WORKERS=1),
+        inventory_client=MagicMock(),
+        pre_checks=caller_pre_checks,
+        github_setup=_StubSetup(set()),
+        migrator=_StubMigrator(set()),
+        post_checks=caller_post_checks,
+    )
+
+    caller_pre_checks.clear()
+    caller_post_checks.clear()
+
+    assert runner.pre_checks == [pre_check]
+    assert runner.post_checks == [post_check]
+
+    report = runner.run([_unit("repo-a")])
+
+    assert report.total_units == 1
+    assert report.status_counts[UnitStatus.SUCCEEDED] == 1
+    assert [c.check_name for c in report.records[0].pre_checks] == ["stub_pre"]
+    assert [c.check_name for c in report.records[0].post_checks] == ["stub_post"]

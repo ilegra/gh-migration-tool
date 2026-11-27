@@ -82,10 +82,10 @@ class WaveRunner:
         self,
         settings: MigrationSettings,
         inventory_client: InventoryClient,
-        pre_checks: list[PreCheck] | None = None,
+        pre_checks: Sequence[PreCheck] | None = None,
         github_setup: GitHubSetup | None = None,
         migrator: Migrator | None = None,
-        post_checks: list[PostCheck] | None = None,
+        post_checks: Sequence[PostCheck] | None = None,
         token_provider: TokenProvider | None = None,
         pipeline_migrators: Sequence[PipelineMigrator] | None = None,
         origin_lock: OriginLock | None = None,
@@ -96,12 +96,12 @@ class WaveRunner:
             )
         self.settings = settings
         self.pre_checks: list[PreCheck] = (
-            pre_checks if pre_checks is not None else [JenkinsJobPreCheck()]
+            list(pre_checks) if pre_checks is not None else [JenkinsJobPreCheck()]
         )
         self.github_setup: GitHubSetup = github_setup or GitHubApiSetup()
         self.migrator: Migrator = migrator or GitSyncMigrator()
         self.post_checks: list[PostCheck] = (
-            post_checks if post_checks is not None else [SourceDriftPostCheck()]
+            list(post_checks) if post_checks is not None else [SourceDriftPostCheck()]
         )
         self.pipeline_migrators: list[PipelineMigrator] = (
             list(pipeline_migrators) if pipeline_migrators is not None else []

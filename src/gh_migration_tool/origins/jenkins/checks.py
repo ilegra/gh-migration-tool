@@ -7,6 +7,8 @@ import logging
 import time
 import urllib.parse
 from collections.abc import Callable
+from http import HTTPStatus
+from typing import Any
 
 import requests
 
@@ -21,6 +23,16 @@ from gh_migration_tool.contracts import (
 from gh_migration_tool.engine._http import build_http_session
 
 logger = logging.getLogger(__name__)
+
+JENKINS_COLOR_GREEN = "blue"
+JENKINS_COLOR_DISABLED_PREFIX = "disabled"
+JENKINS_COLOR_RUNNING_SUFFIX = "_anime"
+JENKINS_BUILD_RESULT_SUCCESS = "SUCCESS"
+JENKINS_TRIGGER_SUCCESS_STATUSES = (
+    HTTPStatus.OK,
+    HTTPStatus.CREATED,
+    HTTPStatus.ACCEPTED,
+)
 
 
 def build_jenkins_headers(username: str | None, token: str) -> dict[str, str]:
@@ -40,7 +52,7 @@ def format_jenkins_job_path(job_name: str) -> str:
 
 
 class JenkinsJobPreCheck(PreCheck):
-    """Verifies that a Migration Unit's latest Jenkins build succeeded."""
+    """Verifies that a Migration Unit's Jenkins job is enabled, idle, and green."""
 
     def __init__(self, session: requests.Session | None = None) -> None:
         self._session = session or build_http_session(allowed_methods={"GET"})
@@ -50,8 +62,38 @@ class JenkinsJobPreCheck(PreCheck):
         """Human-readable identifier for this Pre-check."""
         return "jenkins_job_pre_check"
 
+    def _fetch_json(
+        self,
+        url: str,
+        headers: dict[str, str],
+        timeout: float,
+        unit_name: str,
+    ) -> tuple[dict[str, Any] | None, CheckResult | None]:
+        try:
+            response = self._session.get(url, headers=headers, timeout=timeout)
+        except requests.RequestException as exc:
+            logger.error(
+                "Jenkins pre-check request failed for unit '%s': %s", unit_name, exc
+            )
+            return None, CheckResult(
+                check_name=self.name,
+                passed=False,
+                message=f"Jenkins request failed: {exc}",
+            )
+
+        if response.status_code != HTTPStatus.OK:
+            return None, CheckResult(
+                check_name=self.name,
+                passed=False,
+                message=f"Jenkins API returned HTTP {response.status_code}.",
+                details={"status_code": response.status_code},
+            )
+
+        payload: dict[str, Any] = response.json()
+        return payload, None
+
     def execute(self, unit: MigrationUnit, context: WaveContext) -> CheckResult:
-        """Check the latest Jenkins build status for unit.jenkins_job."""
+        """Check that unit.jenkins_job is enabled, not running/queued, and green."""
         if not unit.jenkins_job or not unit.jenkins_job.strip():
             return CheckResult(
                 check_name=self.name,
@@ -68,53 +110,94 @@ class JenkinsJobPreCheck(PreCheck):
             )
 
         job_path = format_jenkins_job_path(unit.jenkins_job)
-        api_url = f"{jenkins_url}/{job_path}/lastBuild/api/json"
         headers = build_jenkins_headers(
             context.settings.jenkins_username, context.settings.jenkins_token
         )
+        timeout = context.settings.http_timeout_seconds
 
-        try:
-            response = self._session.get(
-                api_url,
-                headers=headers,
-                timeout=context.settings.http_timeout_seconds,
+        job_api_url = f"{jenkins_url}/{job_path}/api/json"
+        job_data, error_result = self._fetch_json(
+            job_api_url, headers, timeout, unit.name
+        )
+        if error_result is not None or job_data is None:
+            return error_result or CheckResult(
+                check_name=self.name,
+                passed=False,
+                message="Jenkins job metadata response was empty.",
             )
-        except requests.RequestException as exc:
-            logger.error(
-                "Jenkins pre-check request failed for unit '%s': %s", unit.name, exc
-            )
+
+        buildable = job_data.get("buildable")
+        in_queue = bool(job_data.get("inQueue", False))
+        raw_color = job_data.get("color")
+        color = raw_color if isinstance(raw_color, str) else ""
+
+        if buildable is False or color.startswith(JENKINS_COLOR_DISABLED_PREFIX):
             return CheckResult(
                 check_name=self.name,
                 passed=False,
-                message=f"Jenkins request failed: {exc}",
+                message=f"Jenkins job '{unit.jenkins_job}' is disabled.",
+                details={"buildable": buildable, "color": raw_color},
             )
 
-        if response.status_code != 200:
+        is_animating = color.endswith(JENKINS_COLOR_RUNNING_SUFFIX)
+        if in_queue or is_animating:
             return CheckResult(
                 check_name=self.name,
                 passed=False,
-                message=f"Jenkins API returned HTTP {response.status_code}.",
-                details={"status_code": response.status_code},
+                message=(
+                    f"Jenkins job '{unit.jenkins_job}' is currently queued or running."
+                ),
+                details={
+                    "in_queue": in_queue,
+                    "building": is_animating,
+                    "color": raw_color,
+                },
             )
 
-        data = response.json()
-        building = bool(data.get("building", False))
-        result = data.get("result")
+        if color != JENKINS_COLOR_GREEN:
+            return CheckResult(
+                check_name=self.name,
+                passed=False,
+                message=(
+                    f"Jenkins job '{unit.jenkins_job}' is not green "
+                    f"(color='{raw_color}')."
+                ),
+                details={"color": raw_color, "result": None},
+            )
+
+        last_build_url = f"{jenkins_url}/{job_path}/lastBuild/api/json"
+        build_data, error_result = self._fetch_json(
+            last_build_url, headers, timeout, unit.name
+        )
+        if error_result is not None or build_data is None:
+            return error_result or CheckResult(
+                check_name=self.name,
+                passed=False,
+                message="Jenkins lastBuild response was empty.",
+            )
+
+        building = bool(build_data.get("building", False))
+        result = build_data.get("result")
 
         if building:
             return CheckResult(
                 check_name=self.name,
                 passed=False,
                 message=f"Jenkins job '{unit.jenkins_job}' is currently building.",
-                details={"building": True, "result": result},
+                details={
+                    "in_queue": in_queue,
+                    "building": True,
+                    "color": raw_color,
+                    "result": result,
+                },
             )
 
-        if result == "SUCCESS":
+        if result == JENKINS_BUILD_RESULT_SUCCESS:
             return CheckResult(
                 check_name=self.name,
                 passed=True,
                 message=f"Latest Jenkins build for '{unit.jenkins_job}' succeeded.",
-                details={"result": result},
+                details={"color": raw_color, "result": result},
             )
 
         return CheckResult(
@@ -123,7 +206,7 @@ class JenkinsJobPreCheck(PreCheck):
             message=(
                 f"Latest Jenkins build for '{unit.jenkins_job}' has status '{result}'."
             ),
-            details={"result": result},
+            details={"color": raw_color, "result": result},
         )
 
 
@@ -172,12 +255,15 @@ class JenkinsTriggerPostCheck(PostCheck):
         job_path = format_jenkins_job_path(unit.jenkins_job)
         trigger_url = f"{jenkins_url}/{job_path}/build"
         try:
+            crumb_timeout = min(
+                context.settings.jenkins_crumb_timeout_seconds, http_timeout
+            )
             crumb_resp = self._session.get(
                 f"{jenkins_url}/crumbIssuer/api/json",
                 headers=headers,
-                timeout=min(15.0, http_timeout),
+                timeout=crumb_timeout,
             )
-            if crumb_resp.status_code == 200:
+            if crumb_resp.status_code == HTTPStatus.OK:
                 crumb_data = crumb_resp.json()
                 field = crumb_data.get("crumbRequestField")
                 crumb = crumb_data.get("crumb")
@@ -197,7 +283,7 @@ class JenkinsTriggerPostCheck(PostCheck):
                 message=f"Failed to trigger Jenkins job '{unit.jenkins_job}': {exc}",
             )
 
-        if trigger_resp.status_code not in (200, 201, 202):
+        if trigger_resp.status_code not in JENKINS_TRIGGER_SUCCESS_STATUSES:
             return CheckResult(
                 check_name=self.name,
                 passed=False,
@@ -222,13 +308,13 @@ class JenkinsTriggerPostCheck(PostCheck):
                     "Jenkins poll request failed for unit '%s': %s", unit.name, exc
                 )
                 continue
-            if resp.status_code != 200:
+            if resp.status_code != HTTPStatus.OK:
                 continue
             data = resp.json()
             if data.get("building"):
                 continue
             result = data.get("result")
-            if result == "SUCCESS":
+            if result == JENKINS_BUILD_RESULT_SUCCESS:
                 return CheckResult(
                     check_name=self.name,
                     passed=True,

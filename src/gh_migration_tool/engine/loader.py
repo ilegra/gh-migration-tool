@@ -101,14 +101,14 @@ class FileWaveLoader(WaveLoader):
                 f"Expected one of {_VALID_VISIBILITIES}."
             )
 
-        raw_deactivate = raw.get("deactivate_origin", True)
-        if raw_deactivate is None:
-            deactivate_origin = True
-        elif isinstance(raw_deactivate, bool):
-            deactivate_origin = raw_deactivate
+        raw_lock = raw.get("lock_origin", True)
+        if raw_lock is None:
+            lock_origin = True
+        elif isinstance(raw_lock, bool):
+            lock_origin = raw_lock
         else:
             raise ValueError(
-                f"Unit '{name}' has invalid deactivate_origin '{raw_deactivate}'. "
+                f"Unit '{name}' has invalid lock_origin '{raw_lock}'. "
                 "Expected a boolean."
             )
 
@@ -141,6 +141,6 @@ class FileWaveLoader(WaveLoader):
             rulesets=list(raw.get("rulesets") or []),
             jenkins_job=raw.get("jenkins_job"),
             github_workflow=raw.get("github_workflow"),
-            deactivate_origin=deactivate_origin,
+            lock_origin=lock_origin,
             metadata=dict(raw.get("metadata") or {}),
         )

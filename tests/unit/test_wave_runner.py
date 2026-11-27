@@ -16,8 +16,8 @@ from gh_migration_tool.contracts import (
     MigrationStageResult,
     MigrationUnit,
     Migrator,
-    OriginDeactivationResult,
-    OriginDeactivator,
+    OriginLock,
+    OriginLockResult,
     OriginSnapshot,
     PipelineMigrationResult,
     PipelineMigrator,
@@ -430,34 +430,40 @@ def test_given_multiple_units_with_pipeline_migrators_when_running_wave_then_exe
     assert len(threads) == 2
 
 
-def test_given_origin_deactivator_when_running_wave_then_runs_before_inventory_and_isolates_failures() -> (
+def test_given_origin_lock_when_running_wave_then_runs_before_inventory_and_isolates_failures() -> (
     None
 ):
-    deactivated_units: list[str] = []
+    locked_units: list[str] = []
 
-    class _StubDeactivator(OriginDeactivator):
+    class _StubOriginLock(OriginLock):
         @property
         def name(self) -> str:
-            return "stub_deactivator"
+            return "stub_origin_lock"
 
-        def deactivate(
-            self, unit: MigrationUnit, context: WaveContext
-        ) -> OriginDeactivationResult:
-            deactivated_units.append(unit.name)
-            if unit.name == "deact-fail":
-                return OriginDeactivationResult(
+        def lock(self, unit: MigrationUnit, context: WaveContext) -> OriginLockResult:
+            locked_units.append(unit.name)
+            if unit.name == "lock-fail":
+                return OriginLockResult(
                     unit_name=unit.name,
                     passed=False,
-                    deactivator_name=self.name,
-                    message="deactivation error",
+                    lock_name=self.name,
+                    message="lock error",
                 )
-            if unit.name == "deact-boom":
+            if unit.name == "lock-boom":
                 raise RuntimeError("unexpected crash")
-            return OriginDeactivationResult(
+            return OriginLockResult(
                 unit_name=unit.name,
                 passed=True,
-                deactivator_name=self.name,
-                message="frozen",
+                lock_name=self.name,
+                message="locked",
+            )
+
+        def unlock(self, unit: MigrationUnit, context: WaveContext) -> OriginLockResult:
+            return OriginLockResult(
+                unit_name=unit.name,
+                passed=True,
+                lock_name=self.name,
+                message="unlocked",
             )
 
     inv_client = MagicMock()
@@ -467,10 +473,10 @@ def test_given_origin_deactivator_when_running_wave_then_runs_before_inventory_a
             name="opt-out-repo",
             origin_url="https://dev.azure.com/org/p/_git/opt-out-repo",
             destination_url="https://github.com/org/opt-out-repo.git",
-            deactivate_origin=False,
+            lock_origin=False,
         ),
-        _unit("deact-fail"),
-        _unit("deact-boom"),
+        _unit("lock-fail"),
+        _unit("lock-boom"),
         _unit("post-fail"),
     ]
     runner = WaveRunner(
@@ -480,22 +486,23 @@ def test_given_origin_deactivator_when_running_wave_then_runs_before_inventory_a
         migrator=_StubMigrator(set()),
         post_checks=[_StubPostCheck({"post-fail"})],
         inventory_client=inv_client,
-        origin_deactivator=_StubDeactivator(),
+        origin_lock=_StubOriginLock(),
     )
 
     report = runner.run(units)
     by_name = {r.unit.name: r for r in report.records}
 
-    assert set(deactivated_units) == {"ok-repo", "deact-fail", "deact-boom"}
+    assert set(locked_units) == {"ok-repo", "lock-fail", "lock-boom"}
     assert by_name["ok-repo"].status == UnitStatus.SUCCEEDED
-    assert by_name["ok-repo"].origin_deactivation_result is not None
-    assert by_name["ok-repo"].origin_deactivation_result.passed is True
+    assert by_name["ok-repo"].origin_lock_result is not None
+    assert by_name["ok-repo"].origin_lock_result.passed is True
+    assert by_name["ok-repo"].origin_unlock_result is None
     assert by_name["opt-out-repo"].status == UnitStatus.SUCCEEDED
-    assert by_name["opt-out-repo"].origin_deactivation_result is None
-    assert by_name["deact-fail"].status == UnitStatus.ORIGIN_DEACTIVATION_FAILED
-    assert by_name["deact-fail"].inventory_result is None
-    assert by_name["deact-boom"].status == UnitStatus.ORIGIN_DEACTIVATION_FAILED
-    assert by_name["deact-boom"].inventory_result is None
+    assert by_name["opt-out-repo"].origin_lock_result is None
+    assert by_name["lock-fail"].status == UnitStatus.ORIGIN_LOCK_FAILED
+    assert by_name["lock-fail"].inventory_result is None
+    assert by_name["lock-boom"].status == UnitStatus.ORIGIN_LOCK_FAILED
+    assert by_name["lock-boom"].inventory_result is None
     assert by_name["post-fail"].status == UnitStatus.POST_CHECK_FAILED
 
     updated_repos = {
@@ -503,6 +510,125 @@ def test_given_origin_deactivator_when_running_wave_then_runs_before_inventory_a
         for call in inv_client.update_progress.call_args_list
     }
     assert updated_repos == {"ok-repo", "opt-out-repo"}
+
+
+def test_given_inventory_update_failure_after_lock_when_running_wave_then_rolls_back_only_newly_locked_units() -> (
+    None
+):
+    unlocked_units: list[str] = []
+
+    class _RollbackOriginLock(OriginLock):
+        @property
+        def name(self) -> str:
+            return "rollback_origin_lock"
+
+        def lock(self, unit: MigrationUnit, context: WaveContext) -> OriginLockResult:
+            return OriginLockResult(
+                unit_name=unit.name,
+                passed=True,
+                lock_name=self.name,
+                already_in_target_state=(unit.name == "pre-locked-repo"),
+                message="locked",
+            )
+
+        def unlock(self, unit: MigrationUnit, context: WaveContext) -> OriginLockResult:
+            unlocked_units.append(unit.name)
+            return OriginLockResult(
+                unit_name=unit.name,
+                passed=True,
+                lock_name=self.name,
+                message="unlocked",
+            )
+
+    inv_client = MagicMock()
+
+    def _update_progress(
+        *, repository_name: str, status: str, project: str | None = None
+    ) -> None:
+        if repository_name in {"inv-fail-repo", "pre-locked-repo"}:
+            raise RuntimeError("sheet unavailable")
+
+    inv_client.update_progress.side_effect = _update_progress
+
+    units = [
+        _unit("ok-repo"),
+        _unit("inv-fail-repo"),
+        _unit("pre-locked-repo"),
+    ]
+    runner = WaveRunner(
+        settings=MigrationSettings(),
+        pre_checks=[],
+        github_setup=_StubSetup(set()),
+        migrator=_StubMigrator(set()),
+        post_checks=[],
+        inventory_client=inv_client,
+        origin_lock=_RollbackOriginLock(),
+    )
+
+    report = runner.run(units)
+    by_name = {r.unit.name: r for r in report.records}
+
+    assert unlocked_units == ["inv-fail-repo"]
+    assert by_name["ok-repo"].status == UnitStatus.SUCCEEDED
+    assert by_name["ok-repo"].origin_unlock_result is None
+    assert by_name["inv-fail-repo"].status == UnitStatus.INVENTORY_UPDATE_FAILED
+    assert by_name["inv-fail-repo"].origin_unlock_result is not None
+    assert by_name["inv-fail-repo"].origin_unlock_result.passed is True
+    assert by_name["pre-locked-repo"].status == UnitStatus.INVENTORY_UPDATE_FAILED
+    assert by_name["pre-locked-repo"].origin_unlock_result is None
+
+
+def test_given_failing_rollback_unlock_when_inventory_fails_then_records_rollback_error() -> (
+    None
+):
+    class _FailingUnlockOriginLock(OriginLock):
+        @property
+        def name(self) -> str:
+            return "failing_unlock_origin_lock"
+
+        def lock(self, unit: MigrationUnit, context: WaveContext) -> OriginLockResult:
+            return OriginLockResult(
+                unit_name=unit.name,
+                passed=True,
+                lock_name=self.name,
+                message="locked",
+            )
+
+        def unlock(self, unit: MigrationUnit, context: WaveContext) -> OriginLockResult:
+            if unit.name == "unlock-boom":
+                raise RuntimeError("unlock crashed")
+            return OriginLockResult(
+                unit_name=unit.name,
+                passed=False,
+                lock_name=self.name,
+                message="unlock denied",
+            )
+
+    inv_client = MagicMock()
+    inv_client.update_progress.side_effect = RuntimeError("inventory write failed")
+
+    runner = WaveRunner(
+        settings=MigrationSettings(),
+        pre_checks=[],
+        github_setup=_StubSetup(set()),
+        migrator=_StubMigrator(set()),
+        post_checks=[],
+        inventory_client=inv_client,
+        origin_lock=_FailingUnlockOriginLock(),
+    )
+
+    report = runner.run([_unit("unlock-fail"), _unit("unlock-boom")])
+    by_name = {r.unit.name: r for r in report.records}
+
+    assert by_name["unlock-fail"].status == UnitStatus.INVENTORY_UPDATE_FAILED
+    assert by_name["unlock-fail"].origin_unlock_result is not None
+    assert by_name["unlock-fail"].origin_unlock_result.passed is False
+    assert "Rollback failed: unlock denied" in by_name["unlock-fail"].error_summary
+
+    assert by_name["unlock-boom"].status == UnitStatus.INVENTORY_UPDATE_FAILED
+    assert by_name["unlock-boom"].origin_unlock_result is not None
+    assert by_name["unlock-boom"].origin_unlock_result.passed is False
+    assert "Rollback failed: unlock crashed" in by_name["unlock-boom"].error_summary
 
 
 def test_given_none_inventory_client_when_initializing_wave_runner_then_raises_value_error() -> (

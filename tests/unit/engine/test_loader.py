@@ -161,10 +161,10 @@ units:
         FileWaveLoader().load(manifest)
 
 
-def test_given_deactivate_origin_in_manifest_when_loading_then_parses_boolean_and_defaults_true(
+def test_given_lock_origin_in_manifest_when_loading_then_parses_boolean_and_defaults_true(
     tmp_path: Path,
 ) -> None:
-    manifest = tmp_path / "deact.yaml"
+    manifest = tmp_path / "lock.yaml"
     manifest.write_text(
         """
 units:
@@ -174,30 +174,30 @@ units:
   - name: repo-opt-out
     origin_url: https://bitbucket.org/ws/repo-opt-out
     destination_url: https://github.com/org/repo-opt-out.git
-    deactivate_origin: false
+    lock_origin: false
 """,
         encoding="utf-8",
     )
 
     units = FileWaveLoader().load(manifest)
-    assert units[0].deactivate_origin is True
-    assert units[1].deactivate_origin is False
+    assert units[0].lock_origin is True
+    assert units[1].lock_origin is False
 
 
-def test_given_non_boolean_deactivate_origin_when_loading_then_raises_value_error(
+def test_given_non_boolean_lock_origin_when_loading_then_raises_value_error(
     tmp_path: Path,
 ) -> None:
-    manifest = tmp_path / "bad_deact.yaml"
+    manifest = tmp_path / "bad_lock.yaml"
     manifest.write_text(
         """
 units:
   - name: repo-bad
     origin_url: https://bitbucket.org/ws/repo-bad
     destination_url: https://github.com/org/repo-bad.git
-    deactivate_origin: "false"
+    lock_origin: "false"
 """,
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="invalid deactivate_origin"):
+    with pytest.raises(ValueError, match="invalid lock_origin"):
         FileWaveLoader().load(manifest)

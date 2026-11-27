@@ -43,6 +43,7 @@ class MigrationUnit:
     origin_exclusive_paths: list[str] = field(default_factory=list)
     destination_exclusive_paths: list[str] = field(default_factory=list)
     visibility: RepoVisibility = "private"
+    repository_settings: dict[str, Any] = field(default_factory=dict)
     teams: dict[str, str] = field(default_factory=dict)
     rulesets: list[dict[str, Any]] = field(default_factory=list)
     jenkins_job: str | None = None

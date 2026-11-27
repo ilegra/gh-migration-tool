@@ -110,13 +110,13 @@ class VerifyRepoExistsGitHubSetup(GitHubSetup):
 
 
 class GitHubApiSetup(GitHubSetup):
-    """Idempotently creates/reuses a GitHub repo and reconciles teams and rulesets."""
+    """Idempotently creates/reuses a GitHub repo and reconciles its configuration."""
 
     def __init__(self, session: requests.Session | None = None) -> None:
         self._session = session or build_http_session()
 
     def setup_unit(self, unit: MigrationUnit, context: WaveContext) -> SetupResult:
-        """Ensure GitHub repository exists, then apply teams and rulesets."""
+        """Ensure GitHub repository exists, then apply settings, teams, and rulesets."""
         target = resolve_github_target(unit, context)
         if target is None:
             return SetupResult(
@@ -183,6 +183,40 @@ class GitHubApiSetup(GitHubSetup):
                     f"HTTP {get_resp.status_code}."
                 ),
             )
+
+        if unit.repository_settings:
+            try:
+                ok, err = self._apply_repository_settings(
+                    api_url,
+                    owner,
+                    repo,
+                    headers,
+                    unit.repository_settings,
+                    timeout=timeout,
+                )
+            except requests.RequestException as exc:
+                logger.error(
+                    "Failed to apply repository settings on '%s/%s': %s",
+                    owner,
+                    repo,
+                    exc,
+                )
+                return SetupResult(
+                    unit_name=unit.name,
+                    passed=False,
+                    created=created,
+                    message=(
+                        f"Failed to apply repository settings on "
+                        f"'{owner}/{repo}': {exc}"
+                    ),
+                )
+            if not ok:
+                return SetupResult(
+                    unit_name=unit.name,
+                    passed=False,
+                    created=created,
+                    message=err,
+                )
 
         for team_slug, permission in unit.teams.items():
             team_url = f"{api_url}/orgs/{owner}/teams/{team_slug}/repos/{owner}/{repo}"
@@ -261,6 +295,33 @@ class GitHubApiSetup(GitHubSetup):
             passed=True,
             created=created,
             message=f"GitHub setup completed for '{owner}/{repo}'.",
+        )
+
+    def _apply_repository_settings(
+        self,
+        api_url: str,
+        owner: str,
+        repo: str,
+        headers: dict[str, str],
+        repository_settings: dict[str, Any],
+        timeout: float = DEFAULT_HTTP_TIMEOUT_SECONDS,
+    ) -> tuple[bool, str]:
+        url = f"{api_url}/repos/{owner}/{repo}"
+        resp = self._session.patch(
+            url, headers=headers, json=repository_settings, timeout=timeout
+        )
+        if resp.status_code == 200:
+            logger.info(
+                "Applied repository settings (%s) on '%s/%s'",
+                ", ".join(sorted(repository_settings)),
+                owner,
+                repo,
+            )
+            return True, ""
+        return (
+            False,
+            f"Failed to apply repository settings on '{owner}/{repo}': "
+            f"HTTP {resp.status_code}.",
         )
 
     def _list_rulesets(

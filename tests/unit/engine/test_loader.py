@@ -30,6 +30,9 @@ units:
     destination_exclusive_paths:
       - .github
     visibility: internal
+    repository_settings:
+      allow_auto_merge: true
+      delete_branch_on_merge: true
     teams:
       platform: push
     rulesets:
@@ -57,6 +60,10 @@ units:
     assert unit.origin_exclusive_paths == ["azure-pipelines.yml"]
     assert unit.destination_exclusive_paths == [".github"]
     assert unit.visibility == "internal"
+    assert unit.repository_settings == {
+        "allow_auto_merge": True,
+        "delete_branch_on_merge": True,
+    }
     assert unit.teams == {"platform": "push"}
     assert unit.rulesets == [{"name": "protect-main", "enforcement": "active"}]
     assert unit.jenkins_job == "folder/service-a-build"
@@ -95,6 +102,7 @@ def test_given_valid_json_list_when_loading_then_returns_migration_units(
     assert unit.origin_exclusive_paths == []
     assert unit.destination_exclusive_paths == []
     assert unit.visibility == "private"
+    assert unit.repository_settings == {}
     assert unit.teams == {}
     assert unit.rulesets == []
     assert unit.jenkins_job is None

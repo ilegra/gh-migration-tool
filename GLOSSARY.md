@@ -47,7 +47,7 @@ The wave-level gating stage that evaluates Pre-check outcomes and filters the Mi
 _Avoid_: Filter step, triage, planning
 
 **GitHub Setup**:
-The provisioning stage that prepares the target GitHub organization and repository state (creation, rulesets, team permissions, or IaC configurations) for a Candidate prior to code mirroring.
+The provisioning stage that prepares the target GitHub organization and repository state (creation, repository settings, rulesets, team permissions, or IaC configurations) for a Candidate prior to code mirroring.
 _Avoid_: Provisioning, bootstrap, onboarding
 
 **Migration**:

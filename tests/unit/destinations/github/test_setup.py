@@ -241,3 +241,125 @@ def test_given_invalid_destination_url_when_parsing_owner_repo_then_raises_value
 ):
     with pytest.raises(ValueError, match="Cannot parse GitHub owner/repo"):
         parse_github_owner_repo("invalid-url")
+
+
+@responses.activate
+def test_given_repository_settings_when_running_github_api_setup_then_patches_repo_settings() -> (
+    None
+):
+    unit = MigrationUnit(
+        name="service-a",
+        origin_url="https://bitbucket.org/org/service-a.git",
+        destination_url="https://github.com/my-org/service-a.git",
+        repository_settings={
+            "allow_auto_merge": True,
+            "delete_branch_on_merge": True,
+        },
+    )
+    responses.add(
+        responses.GET,
+        "https://api.github.com/repos/my-org/service-a",
+        json={"name": "service-a"},
+        status=200,
+    )
+    responses.add(
+        responses.PATCH,
+        "https://api.github.com/repos/my-org/service-a",
+        json={
+            "name": "service-a",
+            "allow_auto_merge": True,
+            "delete_branch_on_merge": True,
+        },
+        status=200,
+    )
+
+    res = GitHubApiSetup().setup_unit(unit, _context())
+
+    assert res.unit_name == "service-a"
+    assert res.passed is True
+    assert res.created is False
+    assert "my-org/service-a" in res.message
+    patch_calls = [c for c in responses.calls if c.request.method == "PATCH"]
+    assert len(patch_calls) == 1
+    assert patch_calls[0].request.url == "https://api.github.com/repos/my-org/service-a"
+    assert patch_calls[0].request.body is not None
+    assert b'"allow_auto_merge": true' in patch_calls[0].request.body
+    assert b'"delete_branch_on_merge": true' in patch_calls[0].request.body
+
+
+@responses.activate
+def test_given_empty_repository_settings_when_running_github_api_setup_then_skips_patch_request() -> (
+    None
+):
+    unit = MigrationUnit(
+        name="service-a",
+        origin_url="https://bitbucket.org/org/service-a.git",
+        destination_url="https://github.com/my-org/service-a.git",
+    )
+    responses.add(
+        responses.GET,
+        "https://api.github.com/repos/my-org/service-a",
+        json={"name": "service-a"},
+        status=200,
+    )
+
+    res = GitHubApiSetup().setup_unit(unit, _context())
+
+    assert res.unit_name == "service-a"
+    assert res.passed is True
+    assert res.created is False
+    assert all(c.request.method != "PATCH" for c in responses.calls)
+
+
+@responses.activate
+def test_given_patch_repo_settings_http_422_when_running_github_api_setup_then_returns_failed() -> (
+    None
+):
+    unit = MigrationUnit(
+        name="service-a",
+        origin_url="https://bitbucket.org/org/service-a.git",
+        destination_url="https://github.com/my-org/service-a.git",
+        repository_settings={"allow_auto_merge": True},
+    )
+    responses.add(
+        responses.GET,
+        "https://api.github.com/repos/my-org/service-a",
+        json={"name": "service-a"},
+        status=200,
+    )
+    responses.add(
+        responses.PATCH,
+        "https://api.github.com/repos/my-org/service-a",
+        json={"message": "Validation Failed"},
+        status=422,
+    )
+
+    res = GitHubApiSetup().setup_unit(unit, _context())
+
+    assert res.unit_name == "service-a"
+    assert res.passed is False
+    assert res.created is False
+    assert "HTTP 422" in res.message
+
+
+def test_given_patch_repo_settings_network_error_when_running_github_api_setup_then_returns_failed() -> (
+    None
+):
+    unit = MigrationUnit(
+        name="service-a",
+        origin_url="https://bitbucket.org/org/service-a.git",
+        destination_url="https://github.com/my-org/service-a.git",
+        repository_settings={"allow_auto_merge": True},
+    )
+    session = MagicMock()
+    get_resp = MagicMock()
+    get_resp.status_code = 200
+    session.get.return_value = get_resp
+    session.patch.side_effect = requests.Timeout("patch timed out")
+
+    res = GitHubApiSetup(session=session).setup_unit(unit, _context())
+
+    assert res.unit_name == "service-a"
+    assert res.passed is False
+    assert res.created is False
+    assert "patch timed out" in res.message

@@ -112,6 +112,17 @@ class FileWaveLoader(WaveLoader):
                 "Expected a boolean."
             )
 
+        raw_repo_settings = raw.get("repository_settings")
+        if raw_repo_settings is None:
+            repository_settings: dict[str, Any] = {}
+        elif isinstance(raw_repo_settings, dict):
+            repository_settings = dict(raw_repo_settings)
+        else:
+            raise ValueError(
+                f"Unit '{name}' has invalid repository_settings "
+                f"'{raw_repo_settings}'. Expected a mapping/object."
+            )
+
         return MigrationUnit(
             name=name,
             origin_url=origin_url,
@@ -125,6 +136,7 @@ class FileWaveLoader(WaveLoader):
                 raw.get("destination_exclusive_paths") or []
             ),
             visibility=cast(RepoVisibility, visibility),
+            repository_settings=repository_settings,
             teams=dict(raw.get("teams") or {}),
             rulesets=list(raw.get("rulesets") or []),
             jenkins_job=raw.get("jenkins_job"),

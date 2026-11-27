@@ -37,7 +37,7 @@ Repository migrations at scale rarely fail because of `git push`—they fail bec
 3. **Snapshot-Based Source Drift Detection over Commit SHA Parity** ([ADR-0003](docs/adr/0003-snapshot-based-source-drift-detection.md)):
    Because `gh-repo-sync` filters `origin_exclusive_paths`, protects `destination_exclusive_paths` (such as `.github/`), and appends `[skip actions]` to commit messages, destination GitHub commit SHAs intentionally diverge from origin SHAs. Instead of comparing origin vs. destination SHAs, `GitSyncMigrator` captures an in-memory `OriginSnapshot` (branch names and tip SHAs) immediately before syncing, and `SourceDriftPostCheck` verifies that no origin branch advanced or was newly created while migration was in flight.
 4. **Strict External Dependency Boundaries** ([ADR-0004](docs/adr/0004-strict-external-dependency-boundaries.md)):
-   `gh-migration-tool` integrates with [`gh-repo-sync`](https://github.com/ilegra/gh-repo-sync) (`v1.1.1`) for repository synchronization and [`gh-migration-inventory-manager`](https://github.com/ilegra/gh-migration-inventory-manager) (`v1.3.10`) for Google Sheets inventory tracking strictly through their public domain entrypoints (`SyncConfig`/`SyncManager` and `Inventory.update_progress`).
+   `gh-migration-tool` integrates with [`gh-repo-sync`](https://github.com/ilegra/gh-repo-sync) (`v1.1.1`) for repository synchronization and [`gh-migration-inventory-manager`](https://github.com/ilegra/gh-migration-inventory-manager) (`v1.3.20`) for Google Sheets inventory tracking strictly through their public domain entrypoints (`SyncConfig`/`SyncManager` and `Inventory.update_progress`).
 
 For canonical domain terminology (`Migration Unit`, `Migration Wave`, `Wave Manifest`, `Candidate`, `Atomic Group`, `Origin Snapshot`, `Source Drift`), see [GLOSSARY.md](GLOSSARY.md).
 
@@ -130,7 +130,7 @@ flowchart LR
 
 Not all migrations are the same:
 - **Validations vary**: One engagement may require checking Jenkins job health, while another must verify Jira/ServiceNow change-freeze windows, SonarQube quality gates, or zero open pull requests on GitLab/Bitbucket.
-- **Provisioning varies**: Some organizations create repositories, teams, and rulesets dynamically via the GitHub API (`GitHubApiSetup`), while others manage repositories through Terraform/IaC (`VerifyRepoExistsGitHubSetup` or a custom bulk `setup_wave` runner).
+- **Provisioning varies**: Some organizations create repositories and configure repository settings, teams, and rulesets dynamically via the GitHub API (`GitHubApiSetup`), while others manage repositories through Terraform/IaC (`VerifyRepoExistsGitHubSetup` or a custom bulk `setup_wave` runner).
 - **Sync & verification vary**: Different SCMs, monorepo splitting rules, or downstream deployment webhooks require custom `Migrator` or `PostCheck` logic.
 
 By implementing the typed interfaces in `gh_migration_tool.contracts`, you reuse the core wave orchestration, `Atomic Group` gating, thread-pool concurrency, `GitHubAppTokenProvider`, Google Sheets inventory writeback, and reporting without reimplementing pipeline plumbing.
@@ -269,7 +269,7 @@ Because `gh-migration-tool` orchestrates multiple external systems (`gh-repo-syn
 #### B. Target GitHub App Setup (Required for `GitHubSetup`, `GitSyncMigrator`, & `GitHubActionsTriggerPostCheck`)
 `gh-migration-tool` authenticates to GitHub using a **GitHub App** (`GitHubAppTokenProvider` signs a short-lived RS256 JWT and exchanges it for an Installation Access Token).
 1. Create a GitHub App in your target GitHub Organization (or Enterprise) with at least:
-   - **Repository Permissions**: `Administration` (Read & Write — needed by `GitHubApiSetup` for repo creation, visibility, and rulesets), `Contents` (Read & Write — needed by `GitSyncMigrator` to push branches/tags), `Actions` (Read & Write — needed if using `GitHubActionsTriggerPostCheck`), `Metadata` (Read-only).
+   - **Repository Permissions**: `Administration` (Read & Write — needed by `GitHubApiSetup` for repo creation, visibility, `repository_settings`, and rulesets), `Contents` (Read & Write — needed by `GitSyncMigrator` to push branches/tags), `Actions` (Read & Write — needed if using `GitHubActionsTriggerPostCheck`), `Metadata` (Read-only).
    - **Organization Permissions**: `Members` (Read & Write — needed if `teams` are configured in `GitHubApiSetup`).
 2. Install the GitHub App on the target organization and note the **App ID** (`GITHUB_APP_ID`) and **Installation ID** (`GITHUB_APP_INSTALLATION_ID`).
 3. Generate a private key (`.pem`) and provide it via **either**:
@@ -322,7 +322,7 @@ A Wave Manifest can be `.yaml`, `.yml`, or `.json` (either a top-level list of u
 
 **`MigrationUnit` fields:**
 - **Required**: `name`, `origin_url`, `destination_url`
-- **Optional**: `project`, `atomic_group`, `origin_provider`, `branch_mapping` (`dict[str, str]`), `origin_exclusive_paths` (`list[str]`), `destination_exclusive_paths` (`list[str]`), `visibility` (`"private"` | `"internal"` | `"public"`, default `"private"`), `teams` (`dict[str, str]`, e.g. `{"platform-eng": "maintain"}`), `rulesets` (`list[dict]`), `jenkins_job`, `github_workflow`, `metadata` (`dict[str, Any]`).
+- **Optional**: `project`, `atomic_group`, `origin_provider`, `branch_mapping` (`dict[str, str]`), `origin_exclusive_paths` (`list[str]`), `destination_exclusive_paths` (`list[str]`), `visibility` (`"private"` | `"internal"` | `"public"`, default `"private"`), `repository_settings` (`dict[str, Any]`, e.g. `{"allow_auto_merge": true}` applied via `PATCH /repos/{owner}/{repo}`), `teams` (`dict[str, str]`, e.g. `{"platform-eng": "maintain"}`), `rulesets` (`list[dict]`), `jenkins_job`, `github_workflow`, `metadata` (`dict[str, Any]`).
 
 Example `wave-manifest.yaml`:
 
@@ -335,6 +335,9 @@ units:
     origin_url: https://gitlab.example.com/core/payments-api.git
     destination_url: https://github.com/my-org/payments-api.git
     visibility: private
+    repository_settings:
+      allow_auto_merge: true
+      delete_branch_on_merge: true
     branch_mapping:
       master: main
     origin_exclusive_paths:

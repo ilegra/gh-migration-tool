@@ -49,6 +49,9 @@ class MigrationSettings(BaseSettings):
         300.0, validation_alias="CI_POLL_TIMEOUT_SECONDS"
     )
     http_timeout_seconds: float = Field(30.0, validation_alias="HTTP_TIMEOUT_SECONDS")
+    jenkins_crumb_timeout_seconds: float = Field(
+        15.0, validation_alias="JENKINS_CRUMB_TIMEOUT_SECONDS"
+    )
     http_max_retries: int = Field(3, validation_alias="HTTP_MAX_RETRIES")
     http_backoff_factor: float = Field(0.5, validation_alias="HTTP_BACKOFF_FACTOR")
 

@@ -30,11 +30,27 @@ def _context(jenkins_url: str = "https://jenkins.example.com") -> WaveContext:
     return WaveContext(settings=settings)
 
 
-@responses.activate
-def test_given_successful_jenkins_build_when_executing_pre_check_then_passes() -> None:
+JOB_API_URL = "https://jenkins.example.com/job/team/job/service-a/api/json"
+LAST_BUILD_API_URL = (
+    "https://jenkins.example.com/job/team/job/service-a/lastBuild/api/json"
+)
+
+
+def _mock_green_job() -> None:
     responses.add(
         responses.GET,
-        "https://jenkins.example.com/job/team/job/service-a/lastBuild/api/json",
+        JOB_API_URL,
+        json={"buildable": True, "inQueue": False, "color": "blue"},
+        status=200,
+    )
+
+
+@responses.activate
+def test_given_successful_jenkins_build_when_executing_pre_check_then_passes() -> None:
+    _mock_green_job()
+    responses.add(
+        responses.GET,
+        LAST_BUILD_API_URL,
         json={"building": False, "result": "SUCCESS"},
         status=200,
     )
@@ -44,14 +60,108 @@ def test_given_successful_jenkins_build_when_executing_pre_check_then_passes() -
     assert res.check_name == "jenkins_job_pre_check"
     assert res.passed is True
     assert "succeeded" in res.message
-    assert res.details == {"result": "SUCCESS"}
+    assert res.details == {"color": "blue", "result": "SUCCESS"}
+
+
+@responses.activate
+def test_given_disabled_jenkins_job_by_buildable_false_when_executing_pre_check_then_fails() -> (
+    None
+):
+    responses.add(
+        responses.GET,
+        JOB_API_URL,
+        json={"buildable": False, "inQueue": False, "color": "blue"},
+        status=200,
+    )
+
+    res = JenkinsJobPreCheck().execute(_unit(), _context())
+
+    assert res.check_name == "jenkins_job_pre_check"
+    assert res.passed is False
+    assert "disabled" in res.message
+    assert res.details == {"buildable": False, "color": "blue"}
+
+
+@responses.activate
+def test_given_disabled_jenkins_job_by_color_when_executing_pre_check_then_fails() -> (
+    None
+):
+    responses.add(
+        responses.GET,
+        JOB_API_URL,
+        json={"buildable": True, "inQueue": False, "color": "disabled"},
+        status=200,
+    )
+
+    res = JenkinsJobPreCheck().execute(_unit(), _context())
+
+    assert res.check_name == "jenkins_job_pre_check"
+    assert res.passed is False
+    assert "disabled" in res.message
+    assert res.details == {"buildable": True, "color": "disabled"}
+
+
+@responses.activate
+def test_given_queued_jenkins_job_when_executing_pre_check_then_fails() -> None:
+    responses.add(
+        responses.GET,
+        JOB_API_URL,
+        json={"buildable": True, "inQueue": True, "color": "blue"},
+        status=200,
+    )
+
+    res = JenkinsJobPreCheck().execute(_unit(), _context())
+
+    assert res.check_name == "jenkins_job_pre_check"
+    assert res.passed is False
+    assert "queued or running" in res.message
+    assert res.details == {"in_queue": True, "building": False, "color": "blue"}
+
+
+@responses.activate
+def test_given_animating_jenkins_job_when_executing_pre_check_then_fails() -> None:
+    responses.add(
+        responses.GET,
+        JOB_API_URL,
+        json={"buildable": True, "inQueue": False, "color": "blue_anime"},
+        status=200,
+    )
+
+    res = JenkinsJobPreCheck().execute(_unit(), _context())
+
+    assert res.check_name == "jenkins_job_pre_check"
+    assert res.passed is False
+    assert "queued or running" in res.message
+    assert res.details == {"in_queue": False, "building": True, "color": "blue_anime"}
+
+
+@responses.activate
+def test_given_non_green_jenkins_job_color_when_executing_pre_check_then_fails() -> (
+    None
+):
+    for color in ("red", "yellow", "aborted", "notbuilt"):
+        responses.reset()
+        responses.add(
+            responses.GET,
+            JOB_API_URL,
+            json={"buildable": True, "inQueue": False, "color": color},
+            status=200,
+        )
+
+        res = JenkinsJobPreCheck().execute(_unit(), _context())
+
+        assert res.check_name == "jenkins_job_pre_check"
+        assert res.passed is False
+        assert "not green" in res.message
+        assert res.details == {"color": color, "result": None}
 
 
 @responses.activate
 def test_given_failed_jenkins_build_when_executing_pre_check_then_fails() -> None:
+    _mock_green_job()
     responses.add(
         responses.GET,
-        "https://jenkins.example.com/job/team/job/service-a/lastBuild/api/json",
+        LAST_BUILD_API_URL,
         json={"building": False, "result": "FAILURE"},
         status=200,
     )
@@ -61,14 +171,15 @@ def test_given_failed_jenkins_build_when_executing_pre_check_then_fails() -> Non
     assert res.check_name == "jenkins_job_pre_check"
     assert res.passed is False
     assert "FAILURE" in res.message
-    assert res.details == {"result": "FAILURE"}
+    assert res.details == {"color": "blue", "result": "FAILURE"}
 
 
 @responses.activate
 def test_given_in_progress_jenkins_build_when_executing_pre_check_then_fails() -> None:
+    _mock_green_job()
     responses.add(
         responses.GET,
-        "https://jenkins.example.com/job/team/job/service-a/lastBuild/api/json",
+        LAST_BUILD_API_URL,
         json={"building": True, "result": None},
         status=200,
     )
@@ -78,14 +189,40 @@ def test_given_in_progress_jenkins_build_when_executing_pre_check_then_fails() -
     assert res.check_name == "jenkins_job_pre_check"
     assert res.passed is False
     assert "currently building" in res.message
-    assert res.details == {"building": True, "result": None}
+    assert res.details == {
+        "in_queue": False,
+        "building": True,
+        "color": "blue",
+        "result": None,
+    }
 
 
 @responses.activate
-def test_given_http_404_from_jenkins_when_executing_pre_check_then_fails() -> None:
+def test_given_http_404_from_jenkins_job_api_when_executing_pre_check_then_fails() -> (
+    None
+):
     responses.add(
         responses.GET,
-        "https://jenkins.example.com/job/team/job/service-a/lastBuild/api/json",
+        JOB_API_URL,
+        status=404,
+    )
+
+    res = JenkinsJobPreCheck().execute(_unit(), _context())
+
+    assert res.check_name == "jenkins_job_pre_check"
+    assert res.passed is False
+    assert "HTTP 404" in res.message
+    assert res.details == {"status_code": 404}
+
+
+@responses.activate
+def test_given_http_404_from_jenkins_last_build_when_executing_pre_check_then_fails() -> (
+    None
+):
+    _mock_green_job()
+    responses.add(
+        responses.GET,
+        LAST_BUILD_API_URL,
         status=404,
     )
 
@@ -103,7 +240,7 @@ def test_given_http_500_from_jenkins_when_executing_pre_check_then_retries_and_f
 ):
     responses.add(
         responses.GET,
-        "https://jenkins.example.com/job/team/job/service-a/lastBuild/api/json",
+        JOB_API_URL,
         status=500,
     )
 

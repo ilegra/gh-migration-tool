@@ -1,6 +1,6 @@
 [project]
 name = "gh-migration-tool"
-version = "0.1.10"
+version = "0.1.11"
 description = "Extensible Python SDK and CLI for orchestrating 7-stage SCM-to-GitHub repository migrations"
 authors = [
     { name = "ilegra" }
@@ -30,7 +30,7 @@ pytest = ">=8.0.0,<10.0.0"
 pytest-cov = ">=6.0.0,<8.0.0"
 pytest-mock = "^3.12.0"
 responses = ">=0.25,<0.27"
-ruff = ">=0.8.0"
+ruff = ">=0.17.6"
 mypy = ">=1.13.0"
 bandit = "^1.7.10"
 pre-commit = "^4.0.0"
